@@ -129,7 +129,6 @@ class CryoCanvasApp:
 
     def _connect_events(self):
         # Use a partial function to pass additional arguments to the event handler
-        on_data_change_handler = tz.curry(self.on_data_change)(app=self)
         for listener in [
             self.viewer.camera.events,
             self.viewer.dims.events,
@@ -137,7 +136,7 @@ class CryoCanvasApp:
         ]:
             listener.connect(
                 debounced(
-                    ensure_main_thread(on_data_change_handler),
+                    self.on_data_change,
                     timeout=1000,
                 )
             )
@@ -151,114 +150,19 @@ class CryoCanvasApp:
     def get_painting_layer(self):
         return self.viewer.layers["Painting"]
 
-    def on_data_change(self, event, app):
-        # Define corner_pixels based on the current view or other logic
-        corner_pixels = self.viewer.layers["Image"].corner_pixels
-
-        # Start the thread with correct arguments
-        thread = threading.Thread(
-            target=self.threaded_on_data_change,
-            args=(
-                event,
-                corner_pixels,
-                self.viewer.dims.current_step,
-                self.widget.model_dropdown.currentText(),
-                {
-                    "basic": self.widget.basic_checkbox.isChecked(),
-                    "embedding": self.widget.embedding_checkbox.isChecked(),
-                },
-                self.widget.live_fit_checkbox.isChecked(),
-                self.widget.live_pred_checkbox.isChecked(),
-                self.widget.data_dropdown.currentText(),
-            ),
-        )
-        thread.start()
-        thread.join()
-
-        # Ensure the prediction layer visual is updated
-        self.get_prediction_layer().refresh()
-
-        # Update class distribution charts
-        self.update_class_distribution_charts()
-
-    def threaded_on_data_change(
-        self,
-        event,
-        corner_pixels,
-        dims,
-        model_type,
-        feature_params,
-        live_fit,
-        live_prediction,
-        data_choice,
-    ):
-        self.logger.info(f"Labels data has changed! {event}")
-
-        # Find a mask of indices we will use for fetching our data
-        mask_idx = (
-            slice(
-                self.viewer.dims.current_step[0],
-                self.viewer.dims.current_step[0] + 1,
-            ),
-            slice(corner_pixels[0, 1], corner_pixels[1, 1]),
-            slice(corner_pixels[0, 2], corner_pixels[1, 2]),
-        )
-        if data_choice == "Whole Image":
-            mask_idx = tuple(
-                [slice(0, sz) for sz in self.get_data_layer().data.shape]
-            )
-
-        self.logger.info(
-            f"mask idx {mask_idx}, image {self.get_data_layer().data.shape}"
-        )
-        active_image = self.get_data_layer().data[mask_idx]
-        self.logger.info(
-            f"active image shape {active_image.shape} data choice {data_choice} painting_data {self.painting_data.shape} mask_idx {mask_idx}"
-        )
-
-        active_labels = self.painting_data[mask_idx]
-
-        def compute_features(
-            mask_idx, use_skimage_features, use_tomotwin_features
-        ):
-            features = []
-            if use_skimage_features:
-                features.append(
-                    self.feature_data_skimage[mask_idx].reshape(
-                        -1, self.feature_data_skimage.shape[-1]
-                    )
-                )
-            if use_tomotwin_features:
-                features.append(
-                    self.feature_data_tomotwin[mask_idx].reshape(
-                        -1, self.feature_data_tomotwin.shape[-1]
-                    )
-                )
-
-            if features:
-                return np.concatenate(features, axis=1)
-            else:
-                raise ValueError("No features selected for computation.")
-
-        training_labels = None
-
+    def on_data_change(self, event):
+        data_choice = self.widget.data_dropdown.currentText()
+        live_fit = self.widget.live_fit_checkbox.isChecked()
+        live_prediction = self.widget.live_pred_checkbox.isChecked()
+        model_type = self.widget.model_dropdown.currentText()
         use_skimage_features = False
         use_tomotwin_features = True
 
-        if data_choice == "Current Displayed Region":
-            # Use only the currently displayed region.
-            training_features = compute_features(
-                mask_idx, use_skimage_features, use_tomotwin_features
-            )
-            training_labels = np.squeeze(active_labels)
-        elif data_choice == "Whole Image":
-            if use_skimage_features:
-                training_features = np.array(self.feature_data_skimage)
-            else:
-                training_features = np.array(self.feature_data_tomotwin)
-            training_labels = np.array(self.painting_data)
-        else:
-            raise ValueError(f"Invalid data choice: {data_choice}")
+        training_features, training_labels = self._get_training_features_and_labels(
+            data_choice=data_choice,
+            use_skimage_features=use_skimage_features,
+            use_tomotwin_features=use_tomotwin_features,
+        )
 
         if (training_labels is None) or np.any(training_labels.shape == 0):
             self.logger.info("No training data yet. Skipping model update")
@@ -277,7 +181,6 @@ class CryoCanvasApp:
                 prediction_features = np.array(self.feature_data_skimage)
             else:
                 prediction_features = np.array(self.feature_data_tomotwin)
-            # Add 1 becasue of the background label adjustment for the model
             prediction = self.predict(
                 self.model, prediction_features, model_type
             )
@@ -285,7 +188,104 @@ class CryoCanvasApp:
                 f"prediction {prediction.shape} prediction layer {self.get_prediction_layer().data.shape} prediction {np.transpose(prediction).shape} features {prediction_features.shape}"
             )
 
+            # TODO: capture prediction layer or return prediction?
             self.get_prediction_layer().data = np.transpose(prediction)
+
+        # Ensure the prediction layer visual is updated
+        self.get_prediction_layer().refresh()
+
+        self.update_class_distribution_charts()
+
+    def _get_training_features_and_labels(self, *, data_choice: str, use_skimage_features: bool, use_tomotwin_features: bool) -> tuple[np.ndarray, np.ndarray]:
+        mask_idx = self._get_mask_idx(data_choice)
+        
+        features = []
+        if use_skimage_features:
+            features.append(
+                self.feature_data_skimage[mask_idx].reshape(
+                    -1, self.feature_data_skimage.shape[-1]
+                )
+            )
+        if use_tomotwin_features:
+            features.append(
+                self.feature_data_tomotwin[mask_idx].reshape(
+                    -1, self.feature_data_tomotwin.shape[-1]
+                )
+            )
+        if features:
+            features = np.concatenate(features, axis=1)
+        else:
+            raise ValueError("No features selected for computation.")
+
+        if data_choice == "Current Displayed Region":
+            # Use only the currently displayed region.
+            training_features = self._get_features(mask_idx=mask_idx, use_skimage_features=use_skimage_features, use_tomotwin_features=use_tomotwin_features)
+            _, active_labels = self._get_active_image_and_labels(data_choice=data_choice, mask_idx=mask_idx)
+            training_labels = np.squeeze(active_labels)
+        elif data_choice == "Whole Image":
+            if use_skimage_features:
+                training_features = np.array(self.feature_data_skimage)
+            else:
+                training_features = np.array(self.feature_data_tomotwin)
+            training_labels = np.squeeze(np.array(self.painting_data))
+        else:
+            raise ValueError(f"Invalid data choice: {data_choice}")
+        return training_features, training_labels
+
+    def _get_mask_idx(self, data_choice: str) -> tuple[slice, slice, slice]:
+        # Find a mask of indices we will use for fetching our data
+        if data_choice == "Whole Image":
+            return tuple(
+                [slice(0, sz) for sz in self.get_data_layer().data.shape]
+            )
+        else:
+            current_step = self.viewer.dims.current_step
+            corner_pixels = self.viewer.layers["Image"].corner_pixels
+            # TODO: handle view order permutations
+            return (
+                slice(current_step[0], current_step[0] + 1),
+                slice(corner_pixels[0, 1], corner_pixels[1, 1]),
+                slice(corner_pixels[0, 2], corner_pixels[1, 2]),
+            )
+
+    def _get_active_image_and_labels(self, *, data_choice: str, mask_idx: tuple[slice, slice, slice]) -> tuple[np.ndarray, np.ndarray]:
+        self.logger.info(
+            f"mask idx {mask_idx}, image {self.get_data_layer().data.shape}"
+        )
+        active_image = self.get_data_layer().data[mask_idx]
+        self.logger.info(
+            f"active image shape {active_image.shape} data choice {data_choice} painting_data {self.painting_data.shape} mask_idx {mask_idx}"
+        )
+        active_labels = self.painting_data[mask_idx]
+        return active_image, active_labels
+
+    def _get_features(self, *, mask_idx: tuple[slice, slice, slice], use_skimage_features: bool, use_tomotwin_features: bool) -> np.ndarray:
+        features = []
+        if use_skimage_features:
+            features.append(
+                self.feature_data_skimage[mask_idx].reshape(
+                    -1, self.feature_data_skimage.shape[-1]
+                )
+            )
+        if use_tomotwin_features:
+            features.append(
+                self.feature_data_tomotwin[mask_idx].reshape(
+                    -1, self.feature_data_tomotwin.shape[-1]
+                )
+            )
+        if features:
+            return np.concatenate(features, axis=1)
+        else:
+            raise ValueError("No features selected for computation.")
+
+    @ensure_main_thread
+    def on_prediction(self, prediction: np.ndarray) -> None:
+        self.logger.info(
+            f"prediction {prediction.shape} prediction layer {self.get_prediction_layer().data.shape} prediction {np.transpose(prediction).shape} features {prediction_features.shape}"
+        )
+
+        # TODO: capture prediction layer or return prediction?
+        self.get_prediction_layer().data = np.transpose(prediction)
 
     def update_model(self, labels, features, model_type):
         # Flatten labels
@@ -541,11 +541,15 @@ class CryoCanvasWidget(QWidget):
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
 
+        # Add status log
+        self.status = QLabel()
+        layout.addWidget(self.status)
+
         self.setLayout(layout)
 
 
 # Initialize your application
 if __name__ == "__main__":
-    zarr_path = "/Users/kharrington/Data/CryoCanvas/cryocanvas_crop_006.zarr"
+    zarr_path = "/Users/asweet/data/cryocanvas/cryocanvas_crop_006.zarr"
     app = CryoCanvasApp(zarr_path)
-    # napari.run()
+    napari.run()
