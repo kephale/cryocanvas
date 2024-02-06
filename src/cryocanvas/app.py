@@ -184,6 +184,7 @@ class CryoCanvasApp:
         if np.any(training_labels.shape == 0):
             self.logger.info("No training data yet. Skipping model update")
         elif live_fit:
+            self.widget.status.setText("Fitting model ...")
             self.fit_model_task = self.executor.submit(
                 self.fit_model,
                 training_labels,
@@ -291,6 +292,7 @@ class CryoCanvasApp:
             else:
                 prediction_features = np.array(self.feature_data_tomotwin)
             
+            self.widget.status.setText("Predicting labels ...")
             self.predict_task = self.executor.submit(self.predict, prediction_features)
             self.predict_task.add_done_callback(self.on_prediction)
 
@@ -307,6 +309,7 @@ class CryoCanvasApp:
         self.logger.info("update charts")
         self.update_class_distribution_charts()
         self.logger.info("finished")
+        self.widget.status.setText("Ready")
 
     def fit_model(self, labels, features, model_type):
         self.logger.info("fit_model")
@@ -567,7 +570,7 @@ class CryoCanvasWidget(QWidget):
         layout.addWidget(self.canvas)
 
         # Add status log
-        self.status = QLabel()
+        self.status = QLabel("Ready")
         layout.addWidget(self.status)
 
         self.setLayout(layout)
