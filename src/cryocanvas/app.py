@@ -2,6 +2,8 @@ import napari
 import zarr
 import numpy as np
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from qtpy.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -45,6 +47,7 @@ class CryoCanvasApp:
         self._init_logging()
         self._add_widget()
         self.model = None
+        self.executor = ThreadPoolExecutor(max_workers=1)
 
     def get_labels_colormap(self):
         """Return a colormap for distinct label colors based on:
@@ -114,7 +117,7 @@ class CryoCanvasApp:
         self.logger.setLevel(logging.DEBUG)
         streamHandler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            "%(asctime)s - %(name)s - %(threadName)s - %(levelname)s - %(message)s"
         )
         streamHandler.setFormatter(formatter)
         self.logger.addHandler(streamHandler)
@@ -128,18 +131,22 @@ class CryoCanvasApp:
         self._connect_events()
 
     def _connect_events(self):
-        # Use a partial function to pass additional arguments to the event handler
         for listener in [
             self.viewer.camera.events,
             self.viewer.dims.events,
-            self.painting_layer.events.paint,
         ]:
             listener.connect(
                 debounced(
-                    self.on_data_change,
+                    self.on_view_change,
                     timeout=1000,
                 )
             )
+        self.painting_layer.events.paint.connect(
+            debounced(
+                self.on_data_change,
+                timeout=1000,
+            )
+        )
 
     def get_data_layer(self):
         return self.viewer.layers["Image"]
@@ -150,7 +157,16 @@ class CryoCanvasApp:
     def get_painting_layer(self):
         return self.viewer.layers["Painting"]
 
+    @ensure_main_thread
+    def on_view_change(self, event):
+        self.logger.info("on_view_change")
+        data_choice = self.widget.data_dropdown.currentText()
+        if data_choice != "Whole Image":
+            self.on_data_change(event=None)
+
+    @ensure_main_thread
     def on_data_change(self, event):
+        self.logger.info("on_data_change")
         data_choice = self.widget.data_dropdown.currentText()
         live_fit = self.widget.live_fit_checkbox.isChecked()
         live_prediction = self.widget.live_pred_checkbox.isChecked()
@@ -158,43 +174,28 @@ class CryoCanvasApp:
         use_skimage_features = False
         use_tomotwin_features = True
 
+        self.logger.info("getting training features and labels")
         training_features, training_labels = self._get_training_features_and_labels(
             data_choice=data_choice,
             use_skimage_features=use_skimage_features,
             use_tomotwin_features=use_tomotwin_features,
         )
 
-        if (training_labels is None) or np.any(training_labels.shape == 0):
+        if np.any(training_labels.shape == 0):
             self.logger.info("No training data yet. Skipping model update")
         elif live_fit:
-            # Retrain model
-            self.logger.info(
-                f"training model with labels {training_labels.shape} features {training_features.shape} unique labels {np.unique(training_labels[:])}"
+            self.fit_model_task = self.executor.submit(
+                self.fit_model,
+                training_labels,
+                training_features,
+                model_type,
             )
-            self.model = self.update_model(
-                training_labels, training_features, model_type
+            on_model_fit = partial(
+                self.on_model_fit,
+                live_prediction=live_prediction,
+                use_skimage_features=use_skimage_features,
             )
-
-        if live_prediction and self.model:
-            # Update prediction_data
-            if use_skimage_features:
-                prediction_features = np.array(self.feature_data_skimage)
-            else:
-                prediction_features = np.array(self.feature_data_tomotwin)
-            prediction = self.predict(
-                self.model, prediction_features, model_type
-            )
-            self.logger.info(
-                f"prediction {prediction.shape} prediction layer {self.get_prediction_layer().data.shape} prediction {np.transpose(prediction).shape} features {prediction_features.shape}"
-            )
-
-            # TODO: capture prediction layer or return prediction?
-            self.get_prediction_layer().data = np.transpose(prediction)
-
-        # Ensure the prediction layer visual is updated
-        self.get_prediction_layer().refresh()
-
-        self.update_class_distribution_charts()
+            self.fit_model_task.add_done_callback(on_model_fit)
 
     def _get_training_features_and_labels(self, *, data_choice: str, use_skimage_features: bool, use_tomotwin_features: bool) -> tuple[np.ndarray, np.ndarray]:
         mask_idx = self._get_mask_idx(data_choice)
@@ -279,15 +280,41 @@ class CryoCanvasApp:
             raise ValueError("No features selected for computation.")
 
     @ensure_main_thread
-    def on_prediction(self, prediction: np.ndarray) -> None:
+    def on_model_fit(self, task: Future, *, live_prediction: bool, use_skimage_features: bool) -> None:
+        self.logger.info("on_model_fit")
+        model = task.result()
+        self.model = model
+        if live_prediction and self.model:
+            # Update prediction_data
+            if use_skimage_features:
+                prediction_features = np.array(self.feature_data_skimage)
+            else:
+                prediction_features = np.array(self.feature_data_tomotwin)
+            
+            self.predict_task = self.executor.submit(self.predict, prediction_features)
+            self.predict_task.add_done_callback(self.on_prediction)
+
+    @ensure_main_thread
+    def on_prediction(self, task: Future[np.ndarray]) -> None:
+        prediction = task.result()
+        layer = self.get_prediction_layer()
         self.logger.info(
-            f"prediction {prediction.shape} prediction layer {self.get_prediction_layer().data.shape} prediction {np.transpose(prediction).shape} features {prediction_features.shape}"
+            f"prediction {prediction.shape} prediction layer {layer.data.shape} prediction {np.transpose(prediction).shape}"# features {prediction_features.shape}"
+        )
+        layer.data = np.transpose(prediction)
+        # Ensure the prediction layer visual is updated
+        # layer.refresh()
+        self.logger.info("update charts")
+        self.update_class_distribution_charts()
+        self.logger.info("finished")
+
+    def fit_model(self, labels, features, model_type):
+        self.logger.info("fit_model")
+        # Retrain model
+        self.logger.info(
+            f"training model with labels {labels.shape} features {features.shape} unique labels {np.unique(labels[:])}"
         )
 
-        # TODO: capture prediction layer or return prediction?
-        self.get_prediction_layer().data = np.transpose(prediction)
-
-    def update_model(self, labels, features, model_type):
         # Flatten labels
         labels = labels.flatten()
         reshaped_features = features.reshape(-1, features.shape[-1])
@@ -335,15 +362,14 @@ class CryoCanvasApp:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
-    def predict(self, model, features, model_type):
+    def predict(self, features):
         # We shift labels + 1 because background is 0 and has special meaning
         prediction = (
             future.predict_segmenter(
-                features.reshape(-1, features.shape[-1]), model
+                features.reshape(-1, features.shape[-1]), self.model
             ).reshape(features.shape[:-1])
             + 1
         )
-
         return np.transpose(prediction)
 
     def update_class_distribution_charts(self):
@@ -478,7 +504,6 @@ class CryoCanvasApp:
 
         # Refresh the painting layer to show the updated background
         self.get_painting_layer().refresh()
-
 
 class CryoCanvasWidget(QWidget):
     def __init__(self, parent=None):
