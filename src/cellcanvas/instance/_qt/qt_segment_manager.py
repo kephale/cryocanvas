@@ -68,6 +68,9 @@ class QtSegmentManager(QWidget):
         self,
         labels_layer: Labels,
     ):
+        labels_layer.visible = False
+
+        # make a new labels layer with instances
         instance_labels = label(labels_layer.data)
         instance_labels_layer = self._viewer.add_labels(instance_labels)
         self.labels_layer = instance_labels_layer
