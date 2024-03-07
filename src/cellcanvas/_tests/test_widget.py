@@ -1,6 +1,6 @@
 import numpy as np
 
-from cellcanvas.app import (
+from cellcanvas._app import (
     CellCanvasWidget,
 )
 

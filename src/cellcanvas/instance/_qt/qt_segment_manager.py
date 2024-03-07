@@ -8,7 +8,8 @@ from napari.layers import Labels
 from napari.types import LayerDataTuple
 from napari.qt import thread_worker
 from napari.qt.threading import FunctionWorker
-from qtpy.QtWidgets import QWidget, QVBoxLayout
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox
+from skimage.measure import label
 
 from cellcanvas.instance.segment_manager import SegmentManager
 from cellcanvas.instance.mesh import binary_mask_to_surface
@@ -28,21 +29,32 @@ class QtSegmentManager(QWidget):
             viewer=self._viewer
         )
 
+        # make the label selection
         self._label_selection_widget = magicgui(
             self._select_labels_layer,
             labels_layer={"choices": self._get_valid_labels_layers},
             call_button="start curating",
         )
+        self._label_selection_group = QGroupBox("Select segmentation layer")
+        label_selection_layout = QVBoxLayout()
+        label_selection_layout.addWidget(self._label_selection_widget.native)
+        self._label_selection_group.setLayout(label_selection_layout)
 
+        # make the mesh creation
         self._mesh_conversion_widget = magicgui(
             self._convert_segment_to_mesh,
             pbar={'visible': False, 'max': 0, 'label': 'working...'}
         )
+        self._mesh_conversion_group = QGroupBox("Convert instance to mesh")
+        mesh_conversion_layout = QVBoxLayout()
+        mesh_conversion_layout.addWidget(self._mesh_conversion_widget.native)
+        self._mesh_conversion_group.setLayout(mesh_conversion_layout)
 
         # set the layout
         self.setLayout(QVBoxLayout())
-        self.layout().addWidget(self._label_selection_widget.native)
-        self.layout().addWidget(self._mesh_conversion_widget.native)
+        self.layout().addWidget(self._label_selection_group)
+        self.layout().addWidget(self._mesh_conversion_group)
+        self.layout().addStretch()
 
     @property
     def labels_layer(self) -> Optional[Labels]:
@@ -56,7 +68,9 @@ class QtSegmentManager(QWidget):
         self,
         labels_layer: Labels,
     ):
-        self._manager.labels_layer = labels_layer
+        instance_labels = label(labels_layer.data)
+        instance_labels_layer = self._viewer.add_labels(instance_labels)
+        self.labels_layer = instance_labels_layer
 
     def _get_valid_labels_layers(self, combo_box) -> List[Labels]:
         return [
