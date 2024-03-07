@@ -11,6 +11,7 @@ from napari.qt.threading import FunctionWorker
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox
 from skimage.measure import label
 
+from cellcanvas.instance._qt.qt_morphological_operations import QtMorphologicalOperations
 from cellcanvas.instance.segment_manager import SegmentManager
 from cellcanvas.instance.mesh import binary_mask_to_surface
 
@@ -40,6 +41,17 @@ class QtSegmentManager(QWidget):
         label_selection_layout.addWidget(self._label_selection_widget.native)
         self._label_selection_group.setLayout(label_selection_layout)
 
+        # make the morphological operation widget
+        self._morphological_operation_widget = QtMorphologicalOperations(
+            segment_manager=self._manager,
+            parent=self
+        )
+        self._morphological_operation_group = QGroupBox("Morphological operations")
+        morphological_operation_layout = QVBoxLayout()
+        morphological_operation_layout.addWidget(self._morphological_operation_widget)
+        self._morphological_operation_group.setLayout(morphological_operation_layout)
+        self._morphological_operation_group.setVisible(False)
+
         # make the mesh creation
         self._mesh_conversion_widget = magicgui(
             self._convert_segment_to_mesh,
@@ -49,10 +61,12 @@ class QtSegmentManager(QWidget):
         mesh_conversion_layout = QVBoxLayout()
         mesh_conversion_layout.addWidget(self._mesh_conversion_widget.native)
         self._mesh_conversion_group.setLayout(mesh_conversion_layout)
+        self._mesh_conversion_group.setVisible(False)
 
         # set the layout
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(self._label_selection_group)
+        self.layout().addWidget(self._morphological_operation_group)
         self.layout().addWidget(self._mesh_conversion_group)
         self.layout().addStretch()
 
@@ -74,6 +88,10 @@ class QtSegmentManager(QWidget):
         instance_labels = label(labels_layer.data)
         instance_labels_layer = self._viewer.add_labels(instance_labels)
         self.labels_layer = instance_labels_layer
+
+        # make the widgets visible
+        self._morphological_operation_group.setVisible(True)
+        self._mesh_conversion_group.setVisible(True)
 
     def _get_valid_labels_layers(self, combo_box) -> List[Labels]:
         return [
