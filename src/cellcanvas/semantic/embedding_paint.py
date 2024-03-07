@@ -1,8 +1,7 @@
 import logging
 import sys
-import threading
-from threading import Thread
 
+import joblib
 import matplotlib.pyplot as plt
 import napari
 import numpy as np
@@ -23,16 +22,17 @@ from qtpy.QtGui import QColor, QFont, QPainter, QPixmap
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSlider,
     QVBoxLayout,
     QWidget,
     QFileDialog,
-    QMessageBox,
 )
 from skimage import future
 from skimage.feature import multiscale_basic_features
@@ -41,25 +41,20 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
 from superqt import ensure_main_thread
 
-from cellcanvas.utils import get_labels_colormap
-from cellcanvas.utils import paint_maker
-import joblib
-
-# from https://github.com/napari/napari/issues/4384
+from cellcanvas.utils import get_labels_colormap, paint_maker
 
 ACTIVE_BUTTON_COLOR = "#AF8B38"
 
-
-# Define a class to encapsulate the Napari viewer and related functionalities
 class EmbeddingPaintingApp:
     def __init__(self, zarr_path, extra_logging=False):
         self.extra_logging = extra_logging
         self.zarr_path = zarr_path
         self.dataset = zarr.open(zarr_path, mode="r")
         self.image_data = self.dataset["crop/original_data"]
-        self.feature_data_skimage = self.dataset["features/skimage"]
-        self.feature_data_tomotwin = self.dataset["features/tomotwin"]
-        self.data_choice = None
+
+        self.features = {"tomotwin": self.reshape_features(self.dataset["features/tomotwin"][:]),
+                         "skimage": self.reshape_features(self.dataset["features/skimage"][:])}
+        
         self.corner_pixels = None
         self.model_type = None
         self.prediction_labels = None
@@ -81,12 +76,14 @@ class EmbeddingPaintingApp:
         self.start_computing_embedding_plot()
         self.update_class_distribution_charts()
 
+    def reshape_features(self, arr):
+        return arr.reshape(-1, arr.shape[-1])
+
     def _add_threading_workers(self):
         # Model fitting worker
         self.model_fit_worker = None
         # Prediction worker
         self.prediction_worker = None
-        self.background_estimation_worker = None
         self.embedding_worker = None
 
     def _init_viewer_layers(self):
@@ -144,9 +141,6 @@ class EmbeddingPaintingApp:
     def _add_widget(self):
         self.widget = EmbeddingPaintingWidget(self)
         # self.viewer.window.add_dock_widget(self.widget, name="CellCanvas")
-        self.widget.estimate_background_button.clicked.connect(
-            self.start_background_estimation
-        )
         self._connect_events()
 
     def _connect_events(self):
@@ -208,12 +202,11 @@ class EmbeddingPaintingApp:
             feature_params,
             live_fit,
             live_prediction,
-            data_choice,
     ):
         self.logger.info(f"Labels data has changed! {event}")
 
         # Assuming you have a method to prepare features and labels
-        features, labels = self.prepare_data_for_model(data_choice, corner_pixels)
+        features, labels = self.prepare_data_for_model(corner_pixels)
 
         # Update stats
         self.painting_labels, self.painting_counts = np.unique(self.painting_data[:], return_counts=True)
@@ -223,7 +216,6 @@ class EmbeddingPaintingApp:
             self.start_model_fit(model_type, features, labels)
         if live_prediction and self.model is not None:
             # For prediction, ensure there's an existing model
-            self.features = features
             self.start_prediction()
 
     def get_model_type(self):
@@ -231,18 +223,24 @@ class EmbeddingPaintingApp:
             self.model_type = self.widget.model_dropdown.currentText()
         return self.model_type
 
-    def get_data_choice(self):
-        if not self.data_choice:
-            self.data_choice = "Whole Image"
-        return self.data_choice
-
     def get_corner_pixels(self):
         if self.corner_pixels is None:
             self.corner_pixels = self.viewer.layers["Image"].corner_pixels
         return self.corner_pixels
 
+    def compute_features(self):
+        # TODO: this introduces a slowdown so we should do all this when features are added
+        features = []
+
+        for name, array in self.features.items():
+            arr = array[:]
+            
+            features.append(arr)                        
+
+        if features:
+            return np.concatenate(features, axis=1)
+    
     def prepare_data_for_model(self):
-        data_choice = self.get_data_choice()
         corner_pixels = self.get_corner_pixels()
 
         # Find a mask of indices we will use for fetching our data
@@ -254,62 +252,21 @@ class EmbeddingPaintingApp:
             slice(corner_pixels[0, 1], corner_pixels[1, 1]),
             slice(corner_pixels[0, 2], corner_pixels[1, 2]),
         )
-        if data_choice == "Whole Image":
-            mask_idx = tuple(
-                [slice(0, sz) for sz in self.get_data_layer().data.shape]
-            )
+
+        mask_idx = tuple(
+            [slice(0, sz) for sz in self.get_data_layer().data.shape]
+        )
 
         self.logger.info(
             f"mask idx {mask_idx}, image {self.get_data_layer().data.shape}"
         )
         active_image = self.get_data_layer().data[mask_idx]
         self.logger.info(
-            f"active image shape {active_image.shape} data choice {data_choice} painting_data {self.painting_data.shape} mask_idx {mask_idx}"
+            f"active image shape {active_image.shape} painting_data {self.painting_data.shape} mask_idx {mask_idx}"
         )
 
-        active_labels = self.painting_data[mask_idx]
-
-        def compute_features(
-                mask_idx, use_skimage_features, use_tomotwin_features
-        ):
-            features = []
-            if use_skimage_features:
-                features.append(
-                    self.feature_data_skimage[mask_idx].reshape(
-                        -1, self.feature_data_skimage.shape[-1]
-                    )
-                )
-            if use_tomotwin_features:
-                features.append(
-                    self.feature_data_tomotwin[mask_idx].reshape(
-                        -1, self.feature_data_tomotwin.shape[-1]
-                    )
-                )
-
-            if features:
-                return np.concatenate(features, axis=1)
-            else:
-                raise ValueError("No features selected for computation.")
-
-        training_labels = None
-
-        use_skimage_features = False
-        use_tomotwin_features = True
-
-        if data_choice == "Current Displayed Region":
-            # Use only the currently displayed region.
-            training_features = compute_features(
-                mask_idx, use_skimage_features, use_tomotwin_features
-            )
-            training_labels = np.squeeze(active_labels)
-        elif data_choice == "Whole Image":
-            if use_skimage_features:
-                training_features = np.array(self.feature_data_skimage)
-            else:
-                training_features = np.array(self.feature_data_tomotwin)
-            training_labels = np.array(self.painting_data)
-        else:
-            raise ValueError(f"Invalid data choice: {data_choice}")
+        training_features = self.compute_features()
+        training_labels = np.array(self.painting_data)
 
         if (training_labels is None) or np.any(training_labels.shape == 0):
             self.logger.info("No training data yet. Skipping model update")
@@ -389,9 +346,7 @@ class EmbeddingPaintingApp:
         return self.predict(self.model, features)
 
     def get_features(self):
-        if self.features is None:
-            self.features = self.feature_data_tomotwin
-        return self.features
+        return self.compute_features()
 
     def start_prediction(self):
         if self.prediction_worker is not None:
@@ -417,7 +372,7 @@ class EmbeddingPaintingApp:
         self.prediction_labels = prediction_labels
         self.prediction_counts = prediction_counts
 
-        self.get_prediction_layer().data = self.prediction_data
+        self.get_prediction_layer().data = self.prediction_data.reshape(self.get_prediction_layer().data.shape)
         self.get_prediction_layer().refresh()
 
         self.update_class_distribution_charts()
@@ -438,8 +393,6 @@ class EmbeddingPaintingApp:
             self.logger.info(f"started model fit")
 
         features, labels = self.prepare_data_for_model()
-        self.features = features
-        self.labels = labels
 
         self.model_fit_worker = self.model_fit_thread(self.get_model_type(), features, labels)
         self.model_fit_worker.returned.connect(self.on_model_fit_completed)
@@ -583,54 +536,9 @@ class EmbeddingPaintingApp:
 
         self.widget.canvas.draw()
 
-    def start_background_estimation(self, model_type, features, labels):
-        if self.background_estimation_worker is not None:
-            self.background_estimation_worker.quit()
-
-        self.background_estimation_worker = self.estimate_background()
-        self.background_estimation_worker.returned.connect(self.on_background_estimation_completed)
-        # TODO update UI to indicate that background estimation
-        self.background_estimation_worker.start()
-
-    @thread_worker
-    def estimate_background(self):
-        print("Estimating background label")
-        embedding_data = self.feature_data_tomotwin[:]
-
-        # Compute the median of the embeddings
-        median_embedding = np.median(embedding_data, axis=(0, 1, 2))
-
-        # Compute the Euclidean distance from the median for each embedding
-        distances = np.sqrt(
-            np.sum((embedding_data - median_embedding) ** 2, axis=-1)
-        )
-
-        # Define a threshold for background detection
-        # TODO note this is hardcoded
-        threshold = np.percentile(distances.flatten(), 1)
-
-        # Identify background pixels (where distance is less than the threshold)
-        background_mask = distances < threshold
-        indices = np.where(background_mask)
-
-        print(
-            f"Distance distribution: min {np.min(distances)} max {np.max(distances)} mean {np.mean(distances)} median {np.median(distances)} threshold {threshold}"
-        )
-
-        print(f"Labeling {np.sum(background_mask)} pixels as background")
-
-        # TODO: optimize this because it is wicked slow
-        #       once that is done the threshold can be increased
-        # Update the painting data with the background class (1)
-        for i in range(len(indices[0])):
-            self.painting_data[indices[0][i], indices[1][i], indices[2][i]] = 1
-
-        # Refresh the painting layer to show the updated background
-        # self.get_painting_layer().refresh()
-
     @thread_worker
     def compute_embedding_projection(self):
-        features = self.feature_data_tomotwin[:].reshape(-1, self.feature_data_tomotwin.shape[-1])
+        features = self.get_features()
         labels = self.painting_data[:].flatten()
 
         # Filter out entries where the label is 0
@@ -675,7 +583,7 @@ class EmbeddingPaintingApp:
         labels = self.painting_data[:].flatten()
 
         # Original image coordinates
-        z_dim, y_dim, x_dim, _ = self.feature_data_tomotwin.shape
+        z_dim, y_dim, x_dim = self.image_data.shape
         X, Y, Z = np.meshgrid(np.arange(x_dim), np.arange(y_dim), np.arange(z_dim), indexing='ij')
         original_coords = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
         # Filter coordinates using the same mask applied to the features
@@ -746,7 +654,7 @@ class EmbeddingPaintingApp:
     @thread_worker
     def paint_thread(self, lasso_path, target_label):
         # Ensure we're working with the full feature dataset
-        all_features_flat = self.feature_data_tomotwin[:].reshape(-1, self.feature_data_tomotwin.shape[-1])
+        all_features_flat = self.get_features()
 
         # Use the PLS model to project these features into the embedding space
         all_embeddings = self.pls.transform(all_features_flat)
@@ -755,7 +663,7 @@ class EmbeddingPaintingApp:
         contained = np.array([lasso_path.contains_point(point) for point in all_embeddings[:, :2]])
 
         # The shape of the original image data, to map flat indices back to spatial coordinates
-        shape = self.feature_data_tomotwin.shape[:-1]
+        shape = self.image_data.shape
 
         # Iterate over all points to update the painting data where contained is True
         paint_indices = np.where(contained)[0]
@@ -795,15 +703,10 @@ class EmbeddingPaintingWidget(QWidget):
         model_layout.addWidget(self.model_dropdown)
         settings_layout.addLayout(model_layout)
 
-        # TODO Multiple embeddings disabled during UX evaluation
-        # self.basic_checkbox = QCheckBox("Basic")
-        # self.basic_checkbox.setChecked(True)
-        # settings_layout.addWidget(self.basic_checkbox)
-
-        # self.embedding_checkbox = QCheckBox("Embedding")
-        # self.embedding_checkbox.setChecked(True)
-        # settings_layout.addWidget(self.embedding_checkbox)
-
+        self.add_features_button = QPushButton("Add Features")
+        self.add_features_button.clicked.connect(self.add_features)
+        settings_layout.addWidget(self.add_features_button)
+        
         thickness_layout = QHBoxLayout()
         thickness_label = QLabel("Adjust Slice Thickness")
         self.thickness_slider = QSlider(Qt.Horizontal)
@@ -842,11 +745,6 @@ class EmbeddingPaintingWidget(QWidget):
         live_pred_layout.addWidget(self.live_pred_checkbox)
         live_pred_layout.addWidget(self.live_pred_button)
         controls_layout.addLayout(live_pred_layout)
-
-        self.estimate_background_button = QPushButton("Estimate Background")
-
-        # TODO disable estimate background button
-        # controls_layout.addWidget(self.estimate_background_button)
 
         self.export_model_button = QPushButton("Export Model")
         controls_layout.addWidget(self.export_model_button)
@@ -893,6 +791,17 @@ class EmbeddingPaintingWidget(QWidget):
         self.live_fit_button.clicked.connect(self.app.start_model_fit)
         self.live_pred_button.clicked.connect(self.app.start_prediction)
 
+    def add_features(self):
+        zarr_path = QFileDialog.getExistingDirectory(self, "Select Directory")
+
+        if zarr_path:
+            try:
+                new_features = zarr.open_array(zarr_path, mode="r")
+
+                self.app.features[zarr_path] = self.app.reshape_features(new_features[:])
+            except Exception as e:
+                print(f"Error loading features from zarr array: {e}")        
+        
     def export_model(self):
         model = self.app.model
         if model is not None:
@@ -1029,3 +938,18 @@ class EmbeddingPaintingWidget(QWidget):
     def on_thickness_changed(self, value):
         self.app.viewer.dims.thickness = (value,) * self.app.viewer.dims.ndim
         self.app.logger.info(f"Thickness changes: {self.app.viewer.dims.thickness}")
+
+
+if __name__ == "__main__":
+    # zarr_path = "/Users/kharrington/Data/CryoCanvas/cryocanvas_crop_007.zarr"
+    # zarr_path = "/Users/kharrington/Data/CryoCanvas/cryocanvas_crop_007_v2.zarr/cryocanvas_crop_007.zarr"
+    zarr_path = "/Users/kharrington/Data/cellcanvas/cellcanvas_crop_007.zarr/"
+    # zarr_path = "/Users/kharrington/Data/cellcanvas/cellcanvas_crop_009.zarr/"
+    # zarr_path = "/Users/kharrington/Data/cellcanvas/cellcanvas_crop_010.zarr/"
+    # zarr_path = "/Users/kharrington/Data/cellcanvas/cryocanvas_crop_008.zarr/"
+    # zarr_path = "/Users/kharrington/Data/cellcanvas/cryocanvas_crop_011.zarr/"
+    app = EmbeddingPaintingApp(zarr_path, extra_logging=True)
+
+    app.viewer.window.add_dock_widget(app.widget, name="CellCanvas")
+    # napari.run()
+        
