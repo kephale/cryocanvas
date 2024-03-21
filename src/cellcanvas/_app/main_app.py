@@ -41,7 +41,7 @@ class CellCanvasApp:
 
 class QtCellCanvas(QWidget):
     def __init__(self, app: CellCanvasApp, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.app = app
         self.viewer = self.app.viewer
 
