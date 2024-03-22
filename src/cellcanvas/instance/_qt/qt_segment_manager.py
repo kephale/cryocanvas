@@ -1,33 +1,32 @@
-from time import sleep
-from typing import Optional, List
+from typing import List, Optional
 
-import numpy as np
-from magicgui import magicgui, widgets
 import napari
+import numpy as np
+from cellcanvas.instance._qt.qt_morphological_operations import (
+    QtMorphologicalOperations,
+)
+from cellcanvas.instance.mesh import binary_mask_to_surface
+from cellcanvas.instance.segment_manager import SegmentManager
+from magicgui import magicgui, widgets
 from napari.layers import Labels
-from napari.types import LayerDataTuple
 from napari.qt import thread_worker
 from napari.qt.threading import FunctionWorker
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox
+from napari.types import LayerDataTuple
+from qtpy.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 from skimage.measure import label
-
-from cellcanvas.instance._qt.qt_morphological_operations import QtMorphologicalOperations
-from cellcanvas.instance.segment_manager import SegmentManager
-from cellcanvas.instance.mesh import binary_mask_to_surface
 
 
 class QtSegmentManager(QWidget):
     def __init__(
-            self,
-            viewer: napari.Viewer,
-            labels_layer: Optional[Labels]  = None,
-            parent:Optional[QWidget] = None
+        self,
+        viewer: napari.Viewer,
+        labels_layer: Optional[Labels] = None,
+        parent: Optional[QWidget] = None,
     ):
         super().__init__(parent=parent)
         self._viewer = viewer
         self._manager = SegmentManager(
-            labels_layer=labels_layer,
-            viewer=self._viewer
+            labels_layer=labels_layer, viewer=self._viewer
         )
 
         # make the label selection
@@ -43,19 +42,24 @@ class QtSegmentManager(QWidget):
 
         # make the morphological operation widget
         self._morphological_operation_widget = QtMorphologicalOperations(
-            segment_manager=self._manager,
-            parent=self
+            segment_manager=self._manager, parent=self
         )
-        self._morphological_operation_group = QGroupBox("Morphological operations")
+        self._morphological_operation_group = QGroupBox(
+            "Morphological operations"
+        )
         morphological_operation_layout = QVBoxLayout()
-        morphological_operation_layout.addWidget(self._morphological_operation_widget)
-        self._morphological_operation_group.setLayout(morphological_operation_layout)
+        morphological_operation_layout.addWidget(
+            self._morphological_operation_widget
+        )
+        self._morphological_operation_group.setLayout(
+            morphological_operation_layout
+        )
         self._morphological_operation_group.setVisible(False)
 
         # make the mesh creation
         self._mesh_conversion_widget = magicgui(
             self._convert_segment_to_mesh,
-            pbar={'visible': False, 'max': 0, 'label': 'working...'}
+            pbar={"visible": False, "max": 0, "label": "working..."},
         )
         self._mesh_conversion_group = QGroupBox("Convert instance to mesh")
         mesh_conversion_layout = QVBoxLayout()
@@ -78,14 +82,12 @@ class QtSegmentManager(QWidget):
     def labels_layer(self, labels_layer: Labels):
         self._manager.labels_layer = labels_layer
 
-    def _select_labels_layer(
-        self,
-        labels_layer: Labels,
-    ):
+    def _select_labels_layer(self, labels_layer: Labels, label_value: int):
         labels_layer.visible = False
 
         # make a new labels layer with instances
-        instance_labels = label(labels_layer.data)
+        semantic_segmentation = labels_layer.data
+        instance_labels = label(semantic_segmentation == label_value)
         instance_labels_layer = self._viewer.add_labels(instance_labels)
         self.labels_layer = instance_labels_layer
 
@@ -113,13 +115,13 @@ class QtSegmentManager(QWidget):
         self.labels_layer = labels_layer
 
     def _convert_segment_to_mesh(
-            self,
-            pbar: widgets.ProgressBar,
-            n_mesh_smoothing_iterations: int = 10,
-            diffusion_coefficient: float = 0.5,
+        self,
+        pbar: widgets.ProgressBar,
+        n_mesh_smoothing_iterations: int = 10,
+        diffusion_coefficient: float = 0.5,
     ) -> FunctionWorker[LayerDataTuple]:
 
-        @thread_worker(connect={'returned': pbar.hide})
+        @thread_worker(connect={"returned": pbar.hide})
         def convert_to_mesh() -> LayerDataTuple:
             selected_labels = list(self._manager._selected_labels)
             if self.labels_layer is None or (len(selected_labels) == 0):
@@ -134,16 +136,14 @@ class QtSegmentManager(QWidget):
             mesh = binary_mask_to_surface(
                 object_mask=binary_mask,
                 n_mesh_smoothing_iterations=n_mesh_smoothing_iterations,
-                diffusion_coefficient=diffusion_coefficient
+                diffusion_coefficient=diffusion_coefficient,
             )
             vertices = np.asarray(mesh.vertices)
             faces = np.asarray(mesh.faces)
-            values = np.ones((vertices.shape[0]))
+            values = np.ones(vertices.shape[0])
             mesh_data = (vertices, faces, values)
             return (mesh_data, {}, "surface")
 
         # show progress bar and return worker
         pbar.show()
         return convert_to_mesh()
-
-
