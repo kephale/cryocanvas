@@ -1,20 +1,32 @@
-import napari
+"""Example of using CellCanvas to pick particles on a surface.
 
-# from cellcanvas.instance._qt.qt_segment_manager import QtSegmentManager
+To use:
+1. update base_file_path to point to cropped_covid.zarr example file
+2. Run the script to launch CellCanvas
+3. Paint/predict until you're happy with the result. The seeded labels are:
+    - 1: background (including inside the capsules)
+    - 2: membrane
+    - 3: spike proteins
+3b. You might want to switch the image layer into the plane
+    depiction before doing the instance segmentation.
+    Sometimes I have trouble manipulating the plane after
+    the instance segmentation - need to look into this.
+4. Once you're happy with the prediction, click the "instance segmentation" tab
+5. Set the label value to 2. This will extract the membrane and
+    make instances via connected components.
+6. Remove the small objects. Suggested threshold: 100
+7. Alt + left mouse button to select an instance to modify.
+    Once select, you can dilate, erode, etc. to smooth it.
+8. With the segment still selected, you can then mesh it
+   using the mesh widget. You can play with the smoothing parameters.
+9. If the mesh looks good, switch to the "geometry" tab.
+    Select the mesh and start surfing!
+"""
+
+import napari
 from cellcanvas._app.main_app import CellCanvasApp, QtCellCanvas
 from cellcanvas.data.data_manager import DataManager
 from cellcanvas.data.data_set import DataSet
-
-# load the image
-# with h5py.File("covid_crop_embedding.h5", "r") as f:
-#     image = f["image"][:]
-#
-# # load the segmentation
-# segmentation = mrcfile.read("TS_004_dose-filt_lp50_bin8_membrain_model.ckpt_segmented.mrc").astype(int)
-#
-# viewer = napari.Viewer()
-# image_layer = viewer.add_image(image)
-# labels_layer = viewer.add_labels(segmentation[0:100, 125:325, 125:375])
 
 base_file_path = "./seg/cropped_covid.zarr"
 
