@@ -23,8 +23,9 @@ class SemanticSegmentationManager:
     def fit(self):
         """Fit using the model using the data in the data manager."""
         features, labels = self.data.get_training_data()
+        features_computed, labels_computed = features.compute(), labels.compute()
 
-        self.model.fit(features, labels)
+        self.model.fit(features_computed, labels_computed)
 
     def predict(self, feature_image: np.ndarray):
         """Predict using the trained model.

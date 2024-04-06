@@ -672,6 +672,8 @@ class EmbeddingPaintingApp:
     def compute_embedding_projection(self):
         # Filter out entries where the label is 0
         filtered_features, filtered_labels = self.data.get_training_data()
+        filtered_features = filtered_features.compute()
+        filtered_labels = filtered_labels.compute()
 
         # label values are offset by 1 for training,
         # undo the offset.

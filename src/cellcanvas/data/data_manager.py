@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from napari.utils.events.containers import SelectableEventedList
 from zarr import Array
+import dask.array as da
 
 from cellcanvas.data.data_set import DataSet
 
@@ -30,23 +31,27 @@ class DataManager:
         features = []
         labels = []
         for dataset in self.datasets:
-            # get the features and labels
-            # todo make lazier
-            dataset_features = np.asarray(dataset.concatenated_features)
-            dataset_labels = np.asarray(dataset.labels)
+            dataset_features = da.asarray(dataset.concatenated_features)
+            dataset_labels = da.asarray(dataset.labels)
 
-            # reshape the data
-            dataset_labels = dataset_labels.flatten()
-            reshaped_features = dataset_features.reshape(
-                -1, dataset_features.shape[-1]
-            )
+            # Flatten labels for boolean indexing
+            flattened_labels = dataset_labels.flatten()
 
-            # Filter features where labels are greater than 0
-            valid_labels = dataset_labels > 0
-            filtered_features = reshaped_features[valid_labels, :]
-            filtered_labels = dataset_labels[valid_labels] - 1  # Adjust labels
+            # Compute valid_indices based on labels > 0
+            valid_indices = da.nonzero(flattened_labels > 0)[0].compute()
+
+            # Flatten only the spatial dimensions of the dataset_features while preserving the feature dimension
+            c, h, w, d = dataset_features.shape
+            reshaped_features = dataset_features.reshape(c, h * w * d)
+
+            # We need to apply valid_indices for each feature dimension separately
+            filtered_features_list = [da.take(reshaped_features[i, :], valid_indices, axis=0) for i in range(c)]
+            filtered_features = da.stack(filtered_features_list, axis=1)
+
+            # Adjust labels
+            filtered_labels = flattened_labels[valid_indices] - 1
 
             features.append(filtered_features)
             labels.append(filtered_labels)
-
-        return np.concatenate(features), np.concatenate(labels)
+            
+        return da.concatenate(features), da.concatenate(labels)
