@@ -394,7 +394,7 @@ class EmbeddingPaintingApp:
                     # Aggregate labels and counts
                     labels, counts = np.unique(predicted_chunk, return_counts=True)
                     all_labels.append(labels)
-                    all_labels.append(counts)
+                    all_counts.append(counts)
 
         # Combine all_labels and all_counts
         unique_labels, inverse = np.unique(np.concatenate(all_labels), return_inverse=True)
