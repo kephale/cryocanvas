@@ -7,6 +7,7 @@ import joblib
 import matplotlib.pyplot as plt
 import napari
 import numpy as np
+import dask.array as da
 import toolz as tz
 import zarr
 from matplotlib.backends.backend_qt5agg import (
@@ -358,26 +359,49 @@ class EmbeddingPaintingApp:
             raise ValueError(f"Unsupported model type: {model_type}")
 
     def predict(self):
-        # We shift labels + 1 because background is 0 and has special meaning
-        # prediction = (
-        #         future.predict_segmenter(
-        #             features.reshape(-1, features.shape[-1]), model
-        #         ).reshape(features.shape[:-1])
-        #         + 1
-        # )
-        prediction = (
-            self.segmentation_manager.predict(
-                np.asarray(self.data.datasets[0].concatenated_features)
-            )
-            + 1
-        )
+        dataset_features = da.asarray(self.data.datasets[0].concatenated_features)
+        chunk_shape = dataset_features.chunksize
+        shape = dataset_features.shape
+        dtype = dataset_features.dtype
+        
+        # Placeholder for aggregated labels and counts
+        all_labels = []
+        all_counts = []
+        
+        # Iterate over chunks
+        for z in range(0, shape[1], chunk_shape[1]):
+            for y in range(0, shape[2], chunk_shape[2]):
+                for x in range(0, shape[3], chunk_shape[3]):
+                    # Compute the slice for the current chunk
+                    # in feature,z,y,x order
+                    chunk_slice = (
+                        slice(None),
+                        slice(z, min(z + chunk_shape[1], shape[1])),
+                        slice(y, min(y + chunk_shape[2], shape[2])),
+                        slice(x, min(x + chunk_shape[3], shape[3])),                        
+                    )
+                    print(f"Predicting on chunk {chunk_slice}")
+                    
+                    # Extract the current chunk
+                    chunk = dataset_features[chunk_slice].compute()
+                    
+                    # Predict on the chunk (adding 1 to each prediction)
+                    predicted_chunk = self.segmentation_manager.predict(chunk) + 1
+                    
+                    # Write the prediction to the corresponding region in the Zarr array
+                    self.prediction_data[chunk_slice[1:]] = predicted_chunk
+                    
+                    # Aggregate labels and counts
+                    labels, counts = np.unique(predicted_chunk, return_counts=True)
+                    all_labels.append(labels)
+                    all_labels.append(counts)
 
-        # Compute stats in thread too
-        prediction_labels, prediction_counts = np.unique(
-            prediction, return_counts=True
-        )
+        # Combine all_labels and all_counts
+        unique_labels, inverse = np.unique(np.concatenate(all_labels), return_inverse=True)
+        total_counts = np.bincount(inverse, weights=np.concatenate(all_counts))
 
-        return (prediction, prediction_labels, prediction_counts)
+        # Now, self.prediction_data should contain the predicted labels
+        return self.prediction_data, unique_labels, total_counts
 
     @thread_worker
     def prediction_thread(self):
@@ -402,6 +426,8 @@ class EmbeddingPaintingApp:
 
         # features = self.get_features()
 
+        # TODO use a yielded connect worker
+        
         self.prediction_worker = self.prediction_thread()
         self.prediction_worker.returned.connect(self.on_prediction_completed)
         self.prediction_worker.start()

@@ -1,6 +1,8 @@
 from typing import Protocol
 
 import numpy as np
+import dask.array as da
+from dask import delayed
 from sklearn.exceptions import NotFittedError
 
 from cellcanvas.data.data_manager import DataManager
@@ -27,7 +29,7 @@ class SemanticSegmentationManager:
 
         self.model.fit(features_computed, labels_computed)
 
-    def predict(self, feature_image: np.ndarray):
+    def predict(self, feature_image):
         """Predict using the trained model.
 
         Parameters
@@ -40,7 +42,8 @@ class SemanticSegmentationManager:
         predicted_labels : Array
             The prediction of class.
         """
-        features = feature_image.reshape((-1, feature_image.shape[-1]))
+        c, z, y, x = feature_image.shape
+        features = feature_image.transpose(1, 2, 3, 0).reshape(-1, c)
 
         try:
             predicted_labels = self.model.predict(features)
@@ -50,4 +53,5 @@ class SemanticSegmentationManager:
                 "for example with the `fit_segmenter` function."
             ) from None
 
-        return predicted_labels.reshape(feature_image.shape[:-1])
+        return predicted_labels.reshape(feature_image.shape[1:])
+
