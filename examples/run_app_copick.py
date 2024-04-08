@@ -51,17 +51,17 @@ root.runs # List of run objects (lazy loading from filesystem location(s))
 # TODO update to use root.config.pickable_objects
 
 
-def get_labels_colormap():
+def get_copick_colormap():
     """Return a colormap for distinct label colors based on the pickable objects."""
     colormap = {obj.label: np.array(obj.color)/255.0 for obj in root.config.pickable_objects}
-    colormap[None] = np.array([1, 1, 1, 1])  # default is white
-    colormap[0] = np.array([0, 0, 0, 0])  # Add any special cases if needed
+    colormap[None] = np.array([1, 1, 1, 1])
+    colormap[9] = np.array([0, 1, 1, 1])
     return colormap
 
-cellcanvas.utils.get_labels_colormap = get_labels_colormap
+cellcanvas.utils.get_labels_colormap = get_copick_colormap
 
 # Use the function
-colormap = get_labels_colormap()
+colormap = get_copick_colormap()
 
 # TODO set names from copick config
 # cell_canvas.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
@@ -234,10 +234,9 @@ class NapariCopickExplorer(QWidget):
         # Set colormap
         # painting_layer.colormap.color_dict
         #  self.app.painting_labels
-        colormap = {obj.label: np.array(obj.color)/255.0 for obj in root.config.pickable_objects}
-        colormap[None] = np.array([1, 1, 1, 1])
-        colormap[9] = np.array([0, 1, 1, 1])
+        colormap = get_copick_colormap()
         self.cell_canvas_app.semantic_segmentor.painting_layer.colormap.color_dict = colormap
+        self.cell_canvas_app.semantic_segmentor.prediction_layer.colormap.color_dict = colormap
         self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in root.config.pickable_objects] + [9]
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
 
@@ -257,3 +256,5 @@ viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", ar
 
 # TODO check scaling between picks and zarrs
 
+# TODO check why painting doesn't work
+# check if it is related to scaling
