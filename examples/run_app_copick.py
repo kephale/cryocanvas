@@ -187,18 +187,19 @@ class NapariCopickExplorer(QWidget):
             for point in points_data['points']
         ]
 
-        points_array = np.array(points_locations)
+        # TODO hard coded scaling
+        points_array = np.array(points_locations) / 10
         
         # Adding the points layer to the viewer, using the pickable_object_name as the layer name
         pickable_object = [obj for obj in root.config.pickable_objects if obj.name == picks.pickable_object_name][0]
-        self.viewer.add_points(points_array, name=picks.pickable_object_name, size=100, out_of_slice_display=True, face_color=np.array(pickable_object.color)/255.0)
+        self.viewer.add_points(points_array, name=picks.pickable_object_name, size=25, out_of_slice_display=True, face_color=np.array(pickable_object.color)/255.0)
 
     def open_tomogram(self, tomogram):
         zarr_store = zarr.open(tomogram.zarr(), mode='r')
         # TODO extract scale/transform info
 
         # TODO scale is hard coded to 10 here
-        self.viewer.add_image(zarr_store[0], name=f"Tomogram: {tomogram.tomo_type}", scale=10)
+        self.viewer.add_image(zarr_store[0], name=f"Tomogram: {tomogram.tomo_type}")
 
     def initialize_or_update_cell_canvas(self):
         # Collect paths from dropdowns
@@ -229,7 +230,7 @@ class NapariCopickExplorer(QWidget):
         # TODO this has multiple copick specific hardcoded hacks
             
         # TODO hardcoded scale factor
-        self.viewer.layers['Image'].scale = (10, 10, 10)
+        # self.viewer.layers['Image'].scale = (10, 10, 10)
 
         # Set colormap
         # painting_layer.colormap.color_dict
@@ -256,5 +257,6 @@ viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", ar
 
 # TODO check scaling between picks and zarrs
 
-# TODO check why painting doesn't work
-# check if it is related to scaling
+# TODO check why painting doesn't work when using proper scaling
+
+# TODO add proper colormap support
