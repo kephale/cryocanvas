@@ -91,13 +91,26 @@ class EmbeddingPaintingApp:
         #     self.logger.info(f"zarr_path: {zarr_path}")
 
         self._add_threading_workers()
-        self._init_viewer_layers()
+        self.update_data_manager(self.data)
         self._add_widget()
         self.model = None
 
         # Initialize plots
         self.start_computing_embedding_plot()
         self.update_class_distribution_charts()
+
+    def update_data_manager(self, data: DataManager):
+        self.data = data
+        self.segmentation_manager.update_data_manager(data)
+
+        # get the image and features
+        # todo this is temporarily assuming a single dataset
+        # need to generalize
+        self.image_data = self.data.datasets[0].image
+        self.features = self.data.datasets[0].features
+
+        # TODO remove old layers
+        self._init_viewer_layers()
 
     def reshape_features(self, arr):
         return arr.reshape(-1, arr.shape[-1])

@@ -22,6 +22,9 @@ class SemanticSegmentationManager:
         self.data = data
         self.model = model
 
+    def update_data_manager(self, data: DataManager):
+        self.data = data
+        
     def fit(self):
         """Fit using the model using the data in the data manager."""
         features, labels = self.data.get_training_data()
