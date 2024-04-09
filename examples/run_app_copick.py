@@ -235,9 +235,7 @@ class NapariCopickExplorer(QWidget):
         # Set colormap
         # painting_layer.colormap.color_dict
         #  self.app.painting_labels
-        colormap = get_copick_colormap()
-        self.cell_canvas_app.semantic_segmentor.painting_layer.colormap.color_dict = colormap
-        self.cell_canvas_app.semantic_segmentor.prediction_layer.colormap.color_dict = colormap
+        self.cell_canvas_app.semantic_segmentor.set_colormap(get_copick_colormap())
         self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in root.config.pickable_objects] + [9]
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
 
@@ -259,4 +257,7 @@ viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", ar
 
 # TODO check why painting doesn't work when using proper scaling
 
-# TODO add proper colormap support
+# TODO add proper colormap and legend support
+# - override exclusion of non-zero labels
+# - consistent colormap in the charts
+# - consistent colormap in the painted part of the labels image

@@ -60,6 +60,7 @@ class EmbeddingPaintingApp:
 
         self.extra_logging = extra_logging
         self.data = data_manager
+        self.colormap = get_labels_colormap()
         clf = RandomForestClassifier(
             n_estimators=50,
             n_jobs=-1,
@@ -98,6 +99,12 @@ class EmbeddingPaintingApp:
         # Initialize plots
         self.start_computing_embedding_plot()
         self.update_class_distribution_charts()
+
+    def set_colormap(self, colormap):
+        self.colormap = colormap
+        
+        self.prediction_layer.colormap = DirectLabelColormap(color_dict=colormap)
+        self.painting_layer.colormap = DirectLabelColormap(color_dict=colormap)        
 
     def update_data_manager(self, data: DataManager):
         self.data = data
@@ -139,7 +146,7 @@ class EmbeddingPaintingApp:
             name="Prediction",
             scale=self.data_layer.scale,
             opacity=0.1,
-            colormap=DirectLabelColormap(color_dict=get_labels_colormap()),
+            colormap=DirectLabelColormap(color_dict=self.colormap),
         )
 
         # self.painting_data = zarr.open(
@@ -154,7 +161,7 @@ class EmbeddingPaintingApp:
             self.painting_data,
             name="Painting",
             scale=self.data_layer.scale,
-            colormap=DirectLabelColormap(color_dict=get_labels_colormap()),
+            colormap=DirectLabelColormap(color_dict=self.colormap),
         )
 
         # Set up painting logging
@@ -223,7 +230,9 @@ class EmbeddingPaintingApp:
         self.corner_pixels = self.viewer.layers["Image"].corner_pixels
 
         # TODO check if this is stalling things
-        self.painting_labels, self.painting_counts = np.unique(
+        # TODO recheck this after copick
+        # self.painting_labels, self.painting_counts = np.unique(
+        _, self.painting_counts = np.unique(
             self.painting_data[:], return_counts=True
         )
 
@@ -252,7 +261,9 @@ class EmbeddingPaintingApp:
         self.logger.info(f"Labels data has changed! {event}")  # noqa: G004
 
         # Update stats
-        self.painting_labels, self.painting_counts = np.unique(
+        # TODO check after copick
+        # self.painting_labels, self.painting_counts = np.unique(
+        _, self.painting_counts = np.unique(
             self.painting_data[:], return_counts=True
         )
 
@@ -586,7 +597,7 @@ class EmbeddingPaintingApp:
         # Example class to color mapping
         class_color_mapping = {
             label: f"#{int(rgba[0] * 255):02x}{int(rgba[1] * 255):02x}{int(rgba[2] * 255):02x}"
-            for label, rgba in get_labels_colormap().items()
+            for label, rgba in self.colormap.items()
         }
 
         self.widget.figure.clear()
@@ -774,7 +785,7 @@ class EmbeddingPaintingApp:
             label: "#{:02x}{:02x}{:02x}".format(
                 int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
             )
-            for label, rgba in get_labels_colormap().items()
+            for label, rgba in self.colormap.items()
         }
 
         # Convert filtered_labels to a list of colors for each point
