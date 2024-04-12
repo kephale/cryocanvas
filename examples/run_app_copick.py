@@ -40,6 +40,13 @@ from qtpy.QtWidgets import QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, Q
 from qtpy.QtCore import Qt
 import glob  # For pattern matching of file names
 
+from sklearn.ensemble import RandomForestClassifier
+
+from cellcanvas.semantic.segmentation_manager import (
+    SemanticSegmentationManager,
+)
+
+import dask.array as da
 
 # Project root
 root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
@@ -81,6 +88,15 @@ class NapariCopickExplorer(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        # Adding new buttons for "Fit on all" and "Predict for all"
+        self.fit_all_button = QPushButton("Fit on all")
+        self.fit_all_button.clicked.connect(self.fit_on_all)
+        layout.addWidget(self.fit_all_button)
+
+        self.predict_all_button = QPushButton("Predict for all")
+        self.predict_all_button.clicked.connect(self.predict_for_all)
+        layout.addWidget(self.predict_all_button)
+        
         # Dropdowns for each data layer
         self.dropdowns = {}
         self.layer_buttons = {}
@@ -142,6 +158,123 @@ class NapariCopickExplorer(QWidget):
         layer.visible = True
         layer.editable = True
         self.viewer.layers.selection.active = layer
+
+    def get_complete_data_manager(self):
+        datasets = []
+        for run in self.root.runs:
+            static_path = run.static_path
+            # Assume there is a method to get the default voxel spacing directory for each run
+            voxel_spacing_dir = self.get_default_voxel_spacing_directory(static_path)
+
+            if not voxel_spacing_dir:
+                print(f"No Voxel Spacing directory found for run {run.name}.")
+                continue
+
+            # Get all Zarr datasets within the voxel spacing directory
+            zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
+
+            # Initialize paths
+            image_path = None
+            features_path = None
+            painting_path = os.path.join(voxel_spacing_dir, "painting_001.zarr")
+            prediction_path = os.path.join(voxel_spacing_dir, "prediction_001.zarr")
+            
+            # Assign paths based on dataset names
+            for dataset_path in zarr_datasets:
+                dataset_name = os.path.basename(dataset_path)
+                if "_features.zarr" in dataset_name.lower():
+                    features_path = dataset_path
+                elif "painting" in dataset_name.lower():
+                    painting_path = dataset_path
+                elif "prediction" in dataset_name.lower():
+                    prediction_path = dataset_path
+                else:
+                    image_path = dataset_path
+
+            # Assume each dataset should be loaded with a specific method that may also handle missing datasets
+            if image_path and features_path:
+                # TODO remove hack for highest resolution
+                dataset = DataSet.from_paths(
+                    image_path=os.path.join(image_path, "0"),
+                    features_path=features_path,
+                    labels_path=painting_path,
+                    segmentation_path=prediction_path,
+                    make_missing_datasets=True
+                )
+                datasets.append(dataset)
+
+        # Create a new data manager with all datasets
+        return DataManager(datasets=datasets)
+
+    def get_default_voxel_spacing_directory(self, static_path):
+        # Find VoxelSpacing directories, assuming a hard coded match for now
+        voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
+        if voxel_spacing_dirs:
+            return voxel_spacing_dirs[0]
+        return None
+
+    def fit_on_all(self):
+        print("Fitting all models to the selected dataset.")
+
+        data_manager = self.get_complete_data_manager()
+
+        clf = RandomForestClassifier(
+            n_estimators=50,
+            n_jobs=-1,
+            max_depth=10,
+            max_samples=0.05,
+        )
+        
+        segmentation_manager = SemanticSegmentationManager(
+            data=data_manager, model=clf
+        )
+        segmentation_manager.fit()
+
+        # TODO this is bad
+        self.cell_canvas_app.semantic_segmentor.segmentation_manager = segmentation_manager        
+        
+    def predict_for_all(self):
+        print("Running predictions on all datasets.")
+
+        # Check if segmentation manager is properly initialized
+        if not hasattr(self.cell_canvas_app.semantic_segmentor, 'segmentation_manager') or self.cell_canvas_app.semantic_segmentor.segmentation_manager is None:
+            print("Segmentation manager is not initialized.")
+            return
+
+        # Retrieve the complete data manager that includes all runs
+        data_manager = self.get_complete_data_manager()
+
+        # Iterate through each dataset within the data manager
+        for dataset in data_manager.datasets:
+            dataset_features = da.asarray(dataset.concatenated_features)
+            chunk_shape = dataset_features.chunksize
+            shape = dataset_features.shape
+            dtype = dataset_features.dtype
+
+            # Iterate over chunks
+            for z in range(0, shape[1], chunk_shape[1]):
+                for y in range(0, shape[2], chunk_shape[2]):
+                    for x in range(0, shape[3], chunk_shape[3]):
+                        # Compute the slice for the current chunk
+                        # in feature,z,y,x order
+                        chunk_slice = (
+                            slice(None),
+                            slice(z, min(z + chunk_shape[1], shape[1])),
+                            slice(y, min(y + chunk_shape[2], shape[2])),
+                            slice(x, min(x + chunk_shape[3], shape[3])),                        
+                        )
+                        print(f"Predicting on chunk {chunk_slice}")
+
+                        # Extract the current chunk
+                        chunk = dataset_features[chunk_slice].compute()
+
+                        # Predict on the chunk (adding 1 to each prediction)
+                        predicted_chunk = self.cell_canvas_app.semantic_segmentor.segmentation_manager.predict(chunk) + 1
+
+                        # Write the prediction to the corresponding region in the Zarr array
+                        dataset.segmentation[chunk_slice[1:]] = predicted_chunk
+
+            print(f"Predictions written")
 
     def on_run_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)

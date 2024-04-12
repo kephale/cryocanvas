@@ -136,6 +136,7 @@ class EmbeddingPaintingApp:
             self.image_data, name="Image", projection_mode="mean"
         )
         self.data_layer._keep_auto_contrast = True
+        self.data_layer.refresh()
         # self.prediction_data = zarr.open(
         #     f"{self.zarr_path}/prediction",
         #     mode="a",
