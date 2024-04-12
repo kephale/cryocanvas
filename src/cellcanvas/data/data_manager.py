@@ -33,7 +33,6 @@ class DataManager:
         for dataset in self.datasets:
             dataset_features = da.asarray(dataset.concatenated_features)
             dataset_labels = da.asarray(dataset.labels)
-
             # Flatten labels for boolean indexing
             flattened_labels = dataset_labels.flatten()
 

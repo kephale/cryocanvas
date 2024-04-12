@@ -42,7 +42,7 @@ import glob  # For pattern matching of file names
 
 
 # Project root
-root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/working/demo_project/copick_config_kyle.json")
+root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
 
 ## Root API
 root.config # CopickConfig object
@@ -83,8 +83,14 @@ class NapariCopickExplorer(QWidget):
 
         # Dropdowns for each data layer
         self.dropdowns = {}
+        self.layer_buttons = {}
         for layer in ["image", "features", "painting", "prediction"]:
-            layout.addWidget(QLabel(f"{layer.capitalize()} Path:"))
+            # Make layer button
+            button = QPushButton(f"Select {layer.capitalize()} Layer")
+            button.clicked.connect(lambda checked, layer=layer: self.activate_layer(layer))
+            layout.addWidget(button)
+            self.layer_buttons[layer] = button
+            # Make layer selection dropdown
             self.dropdowns[layer] = QComboBox()
             layout.addWidget(self.dropdowns[layer])
 
@@ -123,6 +129,20 @@ class NapariCopickExplorer(QWidget):
                             tomo_item = QTreeWidgetItem(child_item, [f"Tomogram: {tomogram.tomo_type}"])
                             tomo_item.setData(0, Qt.UserRole, tomogram)
 
+    def activate_layer(self, layer):
+        print(f"Activating layer {layer}")
+        if layer == "image":
+            layer = self.cell_canvas_app.semantic_segmentor.data_layer
+        elif layer == "painting":
+            layer = self.cell_canvas_app.semantic_segmentor.painting_layer
+        elif layer == "prediction":
+            layer = self.cell_canvas_app.semantic_segmentor.prediction_layer
+        else:
+            return
+        layer.visible = True
+        layer.editable = True
+        self.viewer.layers.selection.active = layer
+
     def on_run_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
         if not isinstance(data, copick.impl.filesystem.CopickRunFSSpec):
@@ -137,36 +157,35 @@ class NapariCopickExplorer(QWidget):
             dropdown.clear()
 
         # Find VoxelSpacing directories
-        voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing*"))
+        # TODO hardcoded to match spacing = 10
+        voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
 
+        if not voxel_spacing_dirs:  # Check if at least one VoxelSpacing directory was found
+            print(f"No Voxel Spacing directories found in {static_path}. Please check the directory structure.")
+            return
+
+        self.voxel_spacing_dir = voxel_spacing_dirs[0]        
+        
         for voxel_spacing_dir in voxel_spacing_dirs:
             # Find all Zarr datasets within the voxel spacing directory
-            zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*_features.zarr"))
-
-            for dataset_path in zarr_datasets:
-                # Check for the existence of 'embedding' directory within each features zarr
-                embedding_path = os.path.join(dataset_path, "*", "embedding")
-                embedding_dirs = glob.glob(embedding_path)
-
-                for embedding_dir in embedding_dirs:
-                    # Assuming 'embedding' is the desired path for features
-                    self.dropdowns["features"].addItem(embedding_dir)
-
             zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
+            
+            # Filtering the paths for each dropdown category
             for dataset_path in zarr_datasets:
-                # For image paths, directly add non-features zarr datasets to the image dropdown
-                if not "features" in os.path.basename(dataset_path).lower():
-                    self.dropdowns["image"].addItem(dataset_path)
+                dataset_name = os.path.basename(dataset_path)
+                if "_features.zarr" in dataset_name.lower():
+                    self.dropdowns["features"].addItem(dataset_name, dataset_path)
+                elif "painting.zarr" in dataset_name.lower():
+                    self.dropdowns["painting"].addItem(dataset_name, dataset_path)
+                elif "prediction.zarr" in dataset_name.lower():
+                    self.dropdowns["prediction"].addItem(dataset_name, dataset_path)
+                else:
+                    # This is for the image dropdown, excluding features, painting, and prediction zarr files
+                    self.dropdowns["image"].addItem(dataset_name, dataset_path)
 
 
         # Set defaults for painting and prediction layers, assuming they follow a fixed naming convention
         # and are expected to be located in a specific VoxelSpacing directory, adjusting as necessary
-        if voxel_spacing_dirs:  # Check if at least one VoxelSpacing directory was found
-            base_voxel_dir = voxel_spacing_dirs[0]  # Assuming to use the first found directory for default paths
-            self.dropdowns["painting"].addItem(os.path.join(base_voxel_dir, "painting.zarr"))
-            self.dropdowns["prediction"].addItem(os.path.join(base_voxel_dir, "prediction.zarr"))
-        else:
-            print("No Voxel Spacing directories found. Please check the directory structure.")
 
                                     
     def on_item_clicked(self, item, column):
@@ -204,16 +223,19 @@ class NapariCopickExplorer(QWidget):
     def initialize_or_update_cell_canvas(self):
         # Collect paths from dropdowns
         paths = {layer: dropdown.currentText() for layer, dropdown in self.dropdowns.items()}
+        
+        if not paths["image"] or not paths["features"]:
+            print("Please ensure image and feature paths are selected before initializing/updating CellCanvas.")
+            return        
 
-        if not all(paths.values()):
-            print("Please ensure all paths are selected before initializing/updating CellCanvas.")
-            return
-
+        default_painting_path = os.path.join(self.voxel_spacing_dir, "painting_001.zarr")
+        default_prediction_path = os.path.join(self.voxel_spacing_dir, "prediction_001.zarr")
+        
         dataset = DataSet.from_paths(
-            image_path=f"{paths['image']}/0",
-            features_path=paths["features"],
-            labels_path=paths["painting"],
-            segmentation_path=paths["prediction"],
+            image_path=os.path.join(self.voxel_spacing_dir, f"{paths['image']}/0"),
+            features_path=os.path.join(self.voxel_spacing_dir, paths["features"]),
+            labels_path=default_painting_path if not paths["painting"] else os.path.join(self.voxel_spacing_dir, paths["painting"]),
+            segmentation_path=default_prediction_path if not paths["prediction"] else os.path.join(self.voxel_spacing_dir, paths["prediction"]),
             make_missing_datasets=True,
         )
 
@@ -243,6 +265,11 @@ class NapariCopickExplorer(QWidget):
         self.cell_canvas_app.semantic_segmentor.widget.setupLegend()
 
 viewer = napari.Viewer()
+
+# Hide layer list and controls
+# viewer.window.qt_viewer.dockLayerList.setVisible(False)
+# viewer.window.qt_viewer.dockLayerControls.setVisible(False)
+
 copick_explorer_widget = NapariCopickExplorer(viewer, root)
 viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", area="left")
 
@@ -261,3 +288,4 @@ viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", ar
 # - override exclusion of non-zero labels
 # - consistent colormap in the charts
 # - consistent colormap in the painted part of the labels image
+

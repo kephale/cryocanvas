@@ -104,7 +104,8 @@ class EmbeddingPaintingApp:
         self.colormap = colormap
         
         self.prediction_layer.colormap = DirectLabelColormap(color_dict=colormap)
-        self.painting_layer.colormap = DirectLabelColormap(color_dict=colormap)        
+        self.painting_layer.colormap = DirectLabelColormap(color_dict=colormap)
+        self.update_class_distribution_charts()
 
     def update_data_manager(self, data: DataManager):
         self.data = data
@@ -117,6 +118,7 @@ class EmbeddingPaintingApp:
         self.features = self.data.datasets[0].features
 
         # TODO remove old layers
+        self.viewer.layers.clear()
         self._init_viewer_layers()
 
     def reshape_features(self, arr):
@@ -133,6 +135,7 @@ class EmbeddingPaintingApp:
         self.data_layer = self.viewer.add_image(
             self.image_data, name="Image", projection_mode="mean"
         )
+        self.data_layer._keep_auto_contrast = True
         # self.prediction_data = zarr.open(
         #     f"{self.zarr_path}/prediction",
         #     mode="a",
