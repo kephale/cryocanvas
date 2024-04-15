@@ -363,7 +363,8 @@ class NapariCopickExplorer(QWidget):
 
         default_painting_path = os.path.join(self.voxel_spacing_dir, "painting_001.zarr")
         default_prediction_path = os.path.join(self.voxel_spacing_dir, "prediction_001.zarr")
-        
+
+        # TODO note this is hard coded to use the highest resolution of a multiscale zarr
         dataset = DataSet.from_paths(
             image_path=os.path.join(self.voxel_spacing_dir, f"{paths['image']}/0"),
             features_path=os.path.join(self.voxel_spacing_dir, paths["features"]),

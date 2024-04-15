@@ -19,7 +19,7 @@ from matplotlib.widgets import LassoSelector
 from napari.qt.threading import thread_worker
 from napari.utils import DirectLabelColormap
 from psygnal import debounced
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtGui import QColor, QPainter, QPixmap
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -903,6 +903,15 @@ class EmbeddingPaintingApp:
 
         # print(f"Painted {np.sum(contained)} pixels with label {target_label}")
 
+class ClickableLabel(QLabel):
+    clicked = Signal(int)  # Emits the label ID
+
+    def __init__(self, label_id, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.label_id = label_id
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.label_id)        
 
 class EmbeddingPaintingWidget(QWidget):
     def __init__(self, app, parent=None):
@@ -1096,7 +1105,7 @@ class EmbeddingPaintingWidget(QWidget):
                 color = painting_layer.colormap.color_dict[label_id]
 
                 # Create a QLabel for color swatch
-                color_swatch = QLabel()
+                color_swatch = ClickableLabel(label_id)
                 pixmap = QPixmap(16, 16)
 
                 if color is None:
@@ -1105,6 +1114,7 @@ class EmbeddingPaintingWidget(QWidget):
                     pixmap.fill(QColor(*[int(c * 255) for c in color]))
 
                 color_swatch.setPixmap(pixmap)
+                color_swatch.clicked.connect(self.activateLabel)
 
                 # Update the mapping with new classes or use the existing name
                 if label_id not in self.class_labels_mapping:
@@ -1117,7 +1127,7 @@ class EmbeddingPaintingWidget(QWidget):
                 label_edit = QLineEdit(label_name)
 
                 # Highlight the label if it is currently being used
-                if label_id == painting_layer._selected_label:
+                if label_id == painting_layer.selected_label:
                     self.highlightLabel(label_edit)
 
                 # Save changes to class labels back to the mapping
@@ -1139,6 +1149,10 @@ class EmbeddingPaintingWidget(QWidget):
             self.legend_placeholder_index, self.legend_group
         )
 
+    def activateLabel(self, label_id):
+        painting_layer = self.app.get_painting_layer()
+        painting_layer.selected_label = label_id
+        
     def updateLegendHighlighting(self, selected_label_event):
         """Update highlighting of legend"""
         current_label_id = selected_label_event.source._selected_label
