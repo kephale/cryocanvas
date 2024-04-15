@@ -519,16 +519,23 @@ class EmbeddingPaintingApp:
             else 1
         )
 
-        painting_counts = (
-            self.painting_counts
-            if self.painting_counts is not None
-            else np.array([0])
-        )
-        painting_labels = (
-            self.painting_labels
-            if self.painting_labels is not None
-            else np.array([0])
-        )
+        # Initialize counts for all labels in painting_labels with zero
+        if self.painting_labels is not None:
+            unique_labels = np.unique(self.painting_labels)
+            painting_counts_dict = {label: 0 for label in unique_labels}
+        else:
+            unique_labels = np.array([0])
+            painting_counts_dict = {0: 0}
+
+        # Update counts from existing painting_counts if available
+        if self.painting_counts is not None and self.painting_labels is not None:
+            for label, count in zip(self.painting_labels, self.painting_counts):
+                painting_counts_dict[label] = count
+
+        # Create arrays from the dictionary
+        painting_labels = np.array(list(painting_counts_dict.keys()))
+        painting_counts = np.array(list(painting_counts_dict.values()))
+
         prediction_counts = (
             self.prediction_counts
             if self.prediction_counts is not None
