@@ -213,6 +213,12 @@ class NapariCopickExplorer(QWidget):
             return voxel_spacing_dirs[0]
         return None
 
+    def get_segmentations_directory(self, static_path):
+        segmentation_dir = glob.glob(os.path.join(static_path, "Segmentations"))
+        if segmentation_dir:
+            return segmentation_dir[0]
+        return None
+
     def fit_on_all(self):
         print("Fitting all models to the selected dataset.")
 
@@ -290,7 +296,7 @@ class NapariCopickExplorer(QWidget):
             dropdown.clear()
 
         # Find VoxelSpacing directories
-        # TODO hardcoded to match spacing = 10
+        # TODO hardcoded to match spacing = 10        
         voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
 
         if not voxel_spacing_dirs:  # Check if at least one VoxelSpacing directory was found
@@ -361,17 +367,29 @@ class NapariCopickExplorer(QWidget):
             print("Please ensure image and feature paths are selected before initializing/updating CellCanvas.")
             return        
 
-        default_painting_path = os.path.join(self.voxel_spacing_dir, "painting_001.zarr")
-        default_prediction_path = os.path.join(self.voxel_spacing_dir, "prediction_001.zarr")
+        # TODO put these into the segmentations directory
+        segmentation_dir = self.get_segmentations_directory(self.selected_run.static_path)
+
+        voxel_spacing = 10
+
+        # Ensure segmentations directory exists
+        os.makedirs(segmentation_dir, exist_ok=True)
+        
+        default_painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
+        default_prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
 
         # TODO note this is hard coded to use the highest resolution of a multiscale zarr
-        dataset = DataSet.from_paths(
-            image_path=os.path.join(self.voxel_spacing_dir, f"{paths['image']}/0"),
-            features_path=os.path.join(self.voxel_spacing_dir, paths["features"]),
-            labels_path=default_painting_path if not paths["painting"] else os.path.join(self.voxel_spacing_dir, paths["painting"]),
-            segmentation_path=default_prediction_path if not paths["prediction"] else os.path.join(self.voxel_spacing_dir, paths["prediction"]),
-            make_missing_datasets=True,
-        )
+        try:
+            dataset = DataSet.from_paths(
+                image_path=os.path.join(self.voxel_spacing_dir, f"{paths['image']}/0"),
+                features_path=os.path.join(self.voxel_spacing_dir, paths["features"]),
+                labels_path=default_painting_path if not paths["painting"] else os.path.join(self.voxel_spacing_dir, paths["painting"]),
+                segmentation_path=default_prediction_path if not paths["prediction"] else os.path.join(self.voxel_spacing_dir, paths["prediction"]),
+                make_missing_datasets=True,
+            )
+        except FileNotFoundError:
+            print(f"File {path} not found!", file=sys.stderr)
+            return
 
         data_manager = DataManager(datasets=[dataset])
         

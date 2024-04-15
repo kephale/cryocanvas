@@ -468,9 +468,6 @@ class EmbeddingPaintingApp:
         self.prediction_labels = prediction_labels
         self.prediction_counts = prediction_counts
 
-        self.get_prediction_layer().data = self.prediction_data.reshape(
-            self.get_prediction_layer().data.shape
-        )
         self.get_prediction_layer().refresh()
 
         self.update_class_distribution_charts()
