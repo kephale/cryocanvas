@@ -47,6 +47,8 @@ from cellcanvas.semantic.segmentation_manager import (
 )
 from cellcanvas.utils import get_labels_colormap, paint_maker
 
+import xgboost as xgb
+
 ACTIVE_BUTTON_COLOR = "#AF8B38"
 
 
@@ -61,11 +63,22 @@ class EmbeddingPaintingApp:
         self.extra_logging = extra_logging
         self.data = data_manager
         self.colormap = get_labels_colormap()
-        clf = RandomForestClassifier(
-            n_estimators=50,
-            n_jobs=-1,
-            max_depth=10,
-            max_samples=0.05,
+        # clf = RandomForestClassifier(
+        #     n_estimators=25,
+        #     n_jobs=-1,
+        #     max_depth=10,
+        #     max_samples=0.05,
+        #     max_features='sqrt',
+        #     class_weight='balanced'
+        # )
+
+        clf = xgb.XGBClassifier(
+            objective='multi:softmax',
+            num_class=10,  # Specify number of classes if using softmax
+            n_estimators=200,
+            max_depth=20,
+            learning_rate=0.1,
+            scale_pos_weight='balanced'  # For handling imbalance
         )
         self.segmentation_manager = SemanticSegmentationManager(
             data=self.data, model=clf
@@ -160,7 +173,8 @@ class EmbeddingPaintingApp:
         #     dtype="i4",
         #     dimension_separator=".",
         # )
-        self.painting_data = self.data.datasets[0].labels
+        
+        self.painting_data = self.data.datasets[0].labels.astype(int)
         self.painting_layer = self.viewer.add_labels(
             self.painting_data,
             name="Painting",
@@ -349,13 +363,14 @@ class EmbeddingPaintingApp:
         if filtered_labels.size == 0:
             self.logger.info("No labels present. Skipping model update.")
             return None
-
+        
         # Calculate class weights
         unique_labels = np.unique(filtered_labels)
         class_weights = compute_class_weight(
             "balanced", classes=unique_labels, y=filtered_labels
         )
         weight_dict = dict(zip(unique_labels, class_weights))
+        self.logger.info(f"Class balance calculated {class_weights}")
 
         # Apply weights
         # sample_weights = np.vectorize(weight_dict.get)(filtered_labels)
@@ -370,6 +385,8 @@ class EmbeddingPaintingApp:
                 class_weight=weight_dict,
             )
             self.segmentation_manager.model = clf
+            # self.segmentation_manager.fit()
+            self.logger.info(f"Starting model fitting")
             self.segmentation_manager.fit()
             return self.segmentation_manager.model
         elif model_type == "XGBoost":
@@ -984,9 +1001,15 @@ class EmbeddingPaintingWidget(QWidget):
         live_pred_layout.addWidget(self.live_pred_button)
         controls_layout.addLayout(live_pred_layout)
 
+        # Export model
         self.export_model_button = QPushButton("Export Model")
         controls_layout.addWidget(self.export_model_button)
         self.export_model_button.clicked.connect(self.export_model)
+
+        # Import model
+        self.import_model_button = QPushButton("Import Model")
+        controls_layout.addWidget(self.import_model_button)
+        self.import_model_button.clicked.connect(self.import_model)        
 
         controls_group.setLayout(controls_layout)
         main_layout.addWidget(controls_group)
@@ -1061,6 +1084,23 @@ class EmbeddingPaintingWidget(QWidget):
                 self, "Model Export", "No model available to export."
             )
 
+    def import_model(self):
+        filePath, _ = QFileDialog.getOpenFileName(
+            self, "Open Model", "", "Joblib Files (*.joblib)"
+        )
+        if filePath:
+            try:
+                model = joblib.load(filePath)
+                self.app.model = model
+                QMessageBox.information(
+                    self, "Model Import", "Model imported successfully!"
+                )
+                print(f"Loaded model file from: {filePath}")
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Model Import", f"Failed to import model. Error: {str(e)}"
+                )
+            
     def change_embedding_label_color(self, color):
         """Change the background color of the embedding label."""
         self.embedding_label.setStyleSheet(f"background-color: {color};")
