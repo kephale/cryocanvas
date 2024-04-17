@@ -6,6 +6,8 @@ import numpy as np
 import zarr
 from zarr import Array
 
+from ome_zarr.io import ZarrLocation
+from ome_zarr.reader import Multiscales
 
 @dataclass
 class DataSet:
@@ -62,7 +64,11 @@ class DataSet:
                 dimension_separator=".",
             )
         else:
-            labels = zarr.open(labels_path, "a")
+            if Multiscales.matches(ZarrLocation(labels_path)):
+                labels = zarr.open(os.path.join(labels_path, "0"),
+                                   "a")
+            else:
+                labels = zarr.open(labels_path, "a")
 
         # get the segmentation
         if (not os.path.isdir(segmentation_path)) and make_missing_datasets:

@@ -1,12 +1,14 @@
 from typing import Protocol
 
+import sys
+import logging
 import numpy as np
 import dask.array as da
 from dask import delayed
 from sklearn.exceptions import NotFittedError
 
 from cellcanvas.data.data_manager import DataManager
-
+from tqdm import tqdm
 
 class SegmentationModel(Protocol):
     """Protocol for semantic segmentations models that are
@@ -22,13 +24,30 @@ class SemanticSegmentationManager:
         self.data = data
         self.model = model
 
+        self._init_logging()
+
+    def _init_logging(self):
+        self.logger = logging.getLogger("cellcanvas")
+        self.logger.setLevel(logging.DEBUG)
+        streamHandler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        streamHandler.setFormatter(formatter)
+        self.logger.addHandler(streamHandler)
+
     def update_data_manager(self, data: DataManager):
         self.data = data
-        
+
     def fit(self):
         """Fit using the model using the data in the data manager."""
+        self.logger.info("Starting to fit")
+        # Get training data from the data manager
         features, labels = self.data.get_training_data()
+
         features_computed, labels_computed = features.compute(), labels.compute()
+
+        self.logger.info("Starting the actual model fit")
 
         self.model.fit(features_computed, labels_computed)
 

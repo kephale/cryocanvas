@@ -16,6 +16,7 @@ class DataManager:
             datasets = [datasets]
         self.datasets = SelectableEventedList(datasets)
 
+    # Normal version
     def get_training_data(self) -> Tuple[Array, Array]:
         """Get the pixel-wise semantic segmentation training data for datasets.
 

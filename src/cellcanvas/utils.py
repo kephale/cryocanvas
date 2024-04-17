@@ -78,3 +78,6 @@ def paint_maker(logger):
         )
 
     return paint
+
+def get_active_button_color():
+    return "#AF8B38"

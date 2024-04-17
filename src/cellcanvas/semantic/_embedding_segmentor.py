@@ -173,8 +173,8 @@ class EmbeddingPaintingApp:
         #     dtype="i4",
         #     dimension_separator=".",
         # )
-        
-        self.painting_data = self.data.datasets[0].labels.astype(int)
+        self.painting_data = self.data.datasets[0].labels
+        # .data.astype("i4")
         self.painting_layer = self.viewer.add_labels(
             self.painting_data,
             name="Painting",
@@ -510,7 +510,6 @@ class EmbeddingPaintingApp:
 
         self.model_fit_worker = self.model_fit_thread(self.get_model_type())
         self.model_fit_worker.returned.connect(self.on_model_fit_completed)
-        # TODO update UI to indicate that model training has started
         self.model_fit_worker.start()
 
     def on_model_fit_completed(self, model):
@@ -1196,6 +1195,7 @@ class EmbeddingPaintingWidget(QWidget):
     def activateLabel(self, label_id):
         painting_layer = self.app.get_painting_layer()
         painting_layer.selected_label = label_id
+        self.updateLegendHighlighting()
         
     def updateLegendHighlighting(self, selected_label_event):
         """Update highlighting of legend"""

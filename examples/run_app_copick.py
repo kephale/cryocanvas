@@ -30,7 +30,10 @@ import cellcanvas
 from cellcanvas._app.main_app import CellCanvasApp, QtCellCanvas
 from cellcanvas.data.data_manager import DataManager
 from cellcanvas.data.data_set import DataSet
+from napari.qt.threading import thread_worker
 
+import sys
+import logging
 import json
 import copick
 from copick.impl.filesystem import CopickRootFSSpec
@@ -45,6 +48,7 @@ from sklearn.ensemble import RandomForestClassifier
 from cellcanvas.semantic.segmentation_manager import (
     SemanticSegmentationManager,
 )
+from cellcanvas.utils import get_active_button_color
 
 import dask.array as da
 
@@ -88,6 +92,8 @@ class NapariCopickExplorer(QWidget):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        self._init_logging()
+
         # Adding new buttons for "Fit on all" and "Predict for all"
         self.fit_all_button = QPushButton("Fit on all")
         self.fit_all_button.clicked.connect(self.fit_on_all)
@@ -121,6 +127,17 @@ class NapariCopickExplorer(QWidget):
         layout.addWidget(self.tree)
 
         self.populate_tree()
+
+    def _init_logging(self):
+        self.logger = logging.getLogger("cellcanvas")
+        self.logger.setLevel(logging.DEBUG)
+        streamHandler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        streamHandler.setFormatter(formatter)
+        self.logger.addHandler(streamHandler)
+        
 
     def populate_tree(self):
         for run in self.root.runs:
@@ -214,14 +231,32 @@ class NapariCopickExplorer(QWidget):
         return None
 
     def get_segmentations_directory(self, static_path):
-        segmentation_dir = glob.glob(os.path.join(static_path, "Segmentations"))
-        if segmentation_dir:
-            return segmentation_dir[0]
-        return None
+        segmentation_dir = os.path.join(static_path, "Segmentations")
+        return segmentation_dir
 
+    def change_button_color(self, button, color):
+        button.setStyleSheet(f"background-color: {color};")
+
+    def reset_button_color(self, button):
+        self.change_button_color(button, "")
+    
     def fit_on_all(self):
+        if not self.cell_canvas_app:
+            print("Initialize cell canvas first")
+            return
+        
         print("Fitting all models to the selected dataset.")
 
+        self.change_button_color(
+            self.fit_all_button, get_active_button_color()
+        )
+        
+        self.model_fit_worker = self.threaded_fit_on_all()
+        self.model_fit_worker.returned.connect(self.on_model_fit_completed)
+        self.model_fit_worker.start()
+
+    @thread_worker
+    def threaded_fit_on_all(self):
         data_manager = self.get_complete_data_manager()
 
         clf = RandomForestClassifier(
@@ -236,10 +271,39 @@ class NapariCopickExplorer(QWidget):
         )
         segmentation_manager.fit()
 
-        # TODO this is bad
-        self.cell_canvas_app.semantic_segmentor.segmentation_manager = segmentation_manager        
+        return segmentation_manager        
+
+    def on_model_fit_completed(self, segmentation_manager):
+        self.logger.debug("on_model_fit_completed")
+
+        self.cell_canvas_app.semantic_segmentor.segmentation_manager = segmentation_manager
+
+        # Reset color
+        self.reset_button_color(self.fit_all_button)
         
     def predict_for_all(self):
+        if not self.cell_canvas_app:
+            print("Initialize cell canvas first")
+            return
+        
+        print("Fitting all models to the selected dataset.")
+
+        self.change_button_color(
+            self.predict_all_button, get_active_button_color()
+        )
+        
+        self.predict_worker = self.threaded_predict_for_all()
+        self.predict_worker.returned.connect(self.on_predict_completed)
+        self.predict_worker.start()
+
+    def on_predict_completed(self, result):
+        self.logger.debug("on_predict_completed")
+
+        # Reset color
+        self.reset_button_color(self.predict_all_button)
+        
+    @thread_worker
+    def threaded_predict_for_all(self):
         print("Running predictions on all datasets.")
 
         # Check if segmentation manager is properly initialized
@@ -290,6 +354,7 @@ class NapariCopickExplorer(QWidget):
 
         self.selected_run = data
         static_path = self.selected_run.static_path
+        self.logger.info(f"Selected {static_path}")
 
         # Clear existing items
         for dropdown in self.dropdowns.values():
@@ -298,13 +363,14 @@ class NapariCopickExplorer(QWidget):
         # Find VoxelSpacing directories
         # TODO hardcoded to match spacing = 10        
         voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
+        segmentation_dir = self.get_segmentations_directory(static_path)
 
         if not voxel_spacing_dirs:  # Check if at least one VoxelSpacing directory was found
             print(f"No Voxel Spacing directories found in {static_path}. Please check the directory structure.")
             return
 
+        # First handle image and features
         self.voxel_spacing_dir = voxel_spacing_dirs[0]        
-        
         for voxel_spacing_dir in voxel_spacing_dirs:
             # Find all Zarr datasets within the voxel spacing directory
             zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
@@ -314,19 +380,33 @@ class NapariCopickExplorer(QWidget):
                 dataset_name = os.path.basename(dataset_path)
                 if "_features.zarr" in dataset_name.lower():
                     self.dropdowns["features"].addItem(dataset_name, dataset_path)
-                elif "painting.zarr" in dataset_name.lower():
-                    self.dropdowns["painting"].addItem(dataset_name, dataset_path)
-                elif "prediction.zarr" in dataset_name.lower():
-                    self.dropdowns["prediction"].addItem(dataset_name, dataset_path)
                 else:
                     # This is for the image dropdown, excluding features, painting, and prediction zarr files
                     self.dropdowns["image"].addItem(dataset_name, dataset_path)
 
 
-        # Set defaults for painting and prediction layers, assuming they follow a fixed naming convention
-        # and are expected to be located in a specific VoxelSpacing directory, adjusting as necessary
+        # Find all Zarr datasets within the Segmentations directory
+        os.makedirs(segmentation_dir, exist_ok=True)
+        zarr_datasets = glob.glob(os.path.join(segmentation_dir, "*.zarr"))
 
-                                    
+        voxel_spacing = 10
+        session_id = 0
+        
+        default_painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_{session_id}_all-multilabel.zarr')
+        default_prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_{session_id}_all-multilabel.zarr')        
+
+        self.dropdowns["painting"].addItem(os.path.basename(default_painting_path), default_painting_path)
+        self.dropdowns["prediction"].addItem(os.path.basename(default_prediction_path), default_prediction_path)
+
+        # Filtering the paths for each dropdown category
+        for dataset_path in zarr_datasets:
+            dataset_name = os.path.basename(dataset_path)
+            # Do not add painting or prediction to prediction or painting respectively
+            if "painting" not in dataset_name.lower():
+                self.dropdowns["prediction"].addItem(dataset_name, dataset_path)
+            if "prediction" not in dataset_name.lower():
+                self.dropdowns["painting"].addItem(dataset_name, dataset_path)
+                                                    
     def on_item_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
         if data:
@@ -334,10 +414,12 @@ class NapariCopickExplorer(QWidget):
                 self.open_picks(data)
             elif isinstance(data, copick.impl.filesystem.CopickTomogramFSSpec):
                 self.open_tomogram(data)
+            elif isinstance(data, copick.models.CopickSegmentation):
+                self.open_labels(data)
 
     def open_picks(self, picks):
         with open(picks.path, 'r') as f:
-            points_data = json.load(f)
+            points_data = json.load(f)            
 
         # Extracting points locations
         points_locations = [
@@ -354,10 +436,19 @@ class NapariCopickExplorer(QWidget):
 
     def open_tomogram(self, tomogram):
         zarr_store = zarr.open(tomogram.zarr(), mode='r')
+        print(f"open_tomogram {tomogram.zarr()}")
         # TODO extract scale/transform info
 
         # TODO scale is hard coded to 10 here
         self.viewer.add_image(zarr_store[0], name=f"Tomogram: {tomogram.tomo_type}")
+
+    def open_labels(self, tomogram):
+        zarr_store = zarr.open(tomogram.zarr(), mode='r')
+        print(f"open_labels {tomogram.zarr()}")
+        # TODO extract scale/transform info
+
+        # TODO scale is hard coded to 10 here
+        self.viewer.add_image(zarr_store[0], name=f"Tomogram: {tomogram.name}")
 
     def initialize_or_update_cell_canvas(self):
         # Collect paths from dropdowns
