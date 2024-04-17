@@ -262,7 +262,7 @@ class EmbeddingPaintingApp:
         self.update_class_distribution_charts()
 
         # Update projection
-        self.start_computing_embedding_plot()
+        # self.start_computing_embedding_plot()
 
         self.widget.setupLegend()
 
@@ -1025,6 +1025,11 @@ class EmbeddingPaintingWidget(QWidget):
         self.embedding_figure = Figure()
         self.embedding_canvas = FigureCanvas(self.embedding_figure)
         self.stats_summary_layout.addWidget(self.embedding_canvas)
+
+        # Create a button for computing the embedding plot
+        self.compute_embedding_button = QPushButton("Compute Embedding Plot")
+        self.compute_embedding_button.clicked.connect(self.app.start_computing_embedding_plot)
+        self.stats_summary_layout.addWidget(self.compute_embedding_button)
 
         stats_summary_group.setLayout(self.stats_summary_layout)
         main_layout.addWidget(stats_summary_group)

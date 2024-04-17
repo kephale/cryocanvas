@@ -390,58 +390,59 @@ class NapariCopickExplorer(QWidget):
         for dropdown in self.dropdowns.values():
             dropdown.clear()
 
+        # Define directories
+        voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
+        segmentation_dir = self.get_segmentations_directory(static_path)
+        os.makedirs(segmentation_dir, exist_ok=True)
+
+        # Initialize dictionary to hold default selections from config
+        default_selections = {}
+
+        # Check for config file and load selections if present
         config_path = os.path.join(static_path, "dataset_config.json")
         if os.path.exists(config_path):
-            # Use the JSON file to set up the dropdowns
             with open(config_path, 'r') as file:
                 config = json.load(file)
+            default_selections = {
+                'image': os.path.join(voxel_spacing_dirs[0], config.get('image')),
+                'features': os.path.join(voxel_spacing_dirs[0], config.get('features')),
+                'painting': os.path.join(segmentation_dir, config.get('painting')),
+                'prediction': os.path.join(segmentation_dir, config.get('prediction'))
+            }
 
-            # Populate dropdowns using the paths in the config
-            for key, rel_path in config.items():
-                abs_path = os.path.join(static_path, rel_path)
-                if os.path.exists(abs_path):
-                    dropdown_key = key.split('_')[0]  # 'image', 'features', 'painting', 'prediction'
-                    self.dropdowns[dropdown_key].addItem(rel_path, abs_path)
-        else:
-            # Find VoxelSpacing directories
-            # TODO hard coded voxel spacing here
-            voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
-            segmentation_dir = self.get_segmentations_directory(static_path)
+        # Helper function to add items if not already in dropdown
+        def add_item_if_not_exists(dropdown, item_name, item_data):
+            if dropdown.findData(item_data) == -1:
+                dropdown.addItem(item_name, item_data)
 
-            if not voxel_spacing_dirs:
-                print(f"No Voxel Spacing directories found in {static_path}. Please check the directory structure.")
-                return
-
-            voxel_spacing_dir = voxel_spacing_dirs[0]
+        # Load all zarr datasets from voxel spacing directories
+        if voxel_spacing_dirs:
             for voxel_spacing_dir in voxel_spacing_dirs:
-                # Find all Zarr datasets within the voxel spacing directory
                 zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
-
                 for dataset_path in zarr_datasets:
                     dataset_name = os.path.basename(dataset_path)
                     if "_features.zarr" in dataset_name.lower():
-                        self.dropdowns["features"].addItem(dataset_name, os.path.join(voxel_spacing_dir, dataset_path))
+                        add_item_if_not_exists(self.dropdowns["features"], dataset_name, dataset_path)
                     else:
-                        self.dropdowns["image"].addItem(dataset_name + "/0", os.path.join(voxel_spacing_dir, dataset_path, "0"))
+                        add_item_if_not_exists(self.dropdowns["image"], dataset_name + "/0", dataset_path + "/0")
 
-            # Handling segmentations
-            os.makedirs(segmentation_dir, exist_ok=True)
-            zarr_datasets = glob.glob(os.path.join(segmentation_dir, "*.zarr"))
-            voxel_spacing = self.get_voxel_spacing()
-            session_id = 0
-            default_painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_{session_id}_all-multilabel.zarr')
-            default_prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_{session_id}_all-multilabel.zarr')
+        # Load all zarr datasets from segmentation directory
+        zarr_datasets = glob.glob(os.path.join(segmentation_dir, "*.zarr"))
+        for dataset_path in zarr_datasets:
+            dataset_name = os.path.basename(dataset_path)
+            if "painting" not in dataset_name.lower():
+                add_item_if_not_exists(self.dropdowns["prediction"], dataset_name, dataset_path)
+            if "prediction" not in dataset_name.lower():
+                add_item_if_not_exists(self.dropdowns["painting"], dataset_name, dataset_path)
 
-            self.dropdowns["painting"].addItem(os.path.basename(default_painting_path), default_painting_path)
-            self.dropdowns["prediction"].addItem(os.path.basename(default_prediction_path), default_prediction_path)
+        # Set default selections in dropdowns if specified in the config
+        for key, dropdown in self.dropdowns.items():
+            if default_selections.get(key):
+                index = dropdown.findData(default_selections[key])
+                if index != -1:
+                    dropdown.setCurrentIndex(index)
 
-            for dataset_path in zarr_datasets:
-                dataset_name = os.path.basename(dataset_path)
-                if "painting" not in dataset_name.lower():
-                    self.dropdowns["prediction"].addItem(dataset_name, dataset_path)
-                if "prediction" not in dataset_name.lower():
-                    self.dropdowns["painting"].addItem(dataset_name, dataset_path)
-                                                    
+
     def on_item_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
         if data:
