@@ -474,8 +474,8 @@ class NapariCopickExplorer(QWidget):
             dataset = DataSet.from_paths(
                 image_path=os.path.join(self.voxel_spacing_dir, f"{paths['image']}/0"),
                 features_path=os.path.join(self.voxel_spacing_dir, paths["features"]),
-                labels_path=default_painting_path if not paths["painting"] else os.path.join(self.voxel_spacing_dir, paths["painting"]),
-                segmentation_path=default_prediction_path if not paths["prediction"] else os.path.join(self.voxel_spacing_dir, paths["prediction"]),
+                labels_path=default_painting_path if not paths["painting"] else os.path.join(segmentation_dir, paths["painting"]),
+                segmentation_path=default_prediction_path if not paths["prediction"] else os.path.join(segmentation_dir, paths["prediction"]),
                 make_missing_datasets=True,
             )
         except FileNotFoundError:

@@ -19,7 +19,7 @@ from matplotlib.widgets import LassoSelector
 from napari.qt.threading import thread_worker
 from napari.utils import DirectLabelColormap
 from psygnal import debounced
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import Qt, Signal, Slot
 from qtpy.QtGui import QColor, QPainter, QPixmap
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qtpy import QtCore, QtWidgets
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
@@ -222,7 +223,7 @@ class EmbeddingPaintingApp:
             listener.connect(
                 debounced(
                     ensure_main_thread(on_data_change_handler),
-                    timeout=1000,
+                    timeout=5000,
                 )
             )
 
@@ -378,10 +379,10 @@ class EmbeddingPaintingApp:
         # Model fitting
         if model_type == "Random Forest":
             clf = RandomForestClassifier(
-                n_estimators=50,
+                n_estimators=200,
                 n_jobs=-1,
-                max_depth=10,
-                max_samples=0.05,
+                max_depth=15,
+                max_samples=0.1,
                 class_weight=weight_dict,
             )
             self.segmentation_manager.model = clf
@@ -575,9 +576,6 @@ class EmbeddingPaintingApp:
             )
             self.logger.info(
                 f"image layer: contrast_limits = {self.viewer.layers['Image'].contrast_limits}, opacity = {self.viewer.layers['Image'].opacity}, gamma = {self.viewer.layers['Image'].gamma}"  # noqa G004
-            )
-            self.logger.info(
-                f"Current model type: {self.widget.model_dropdown.currentText()}"  # noqa G004
             )
 
         # Calculate percentages instead of raw counts
@@ -916,10 +914,10 @@ class EmbeddingPaintingApp:
             # Update the painting data
             self.painting_data[z, y, x] = target_label
 
-        if self.extra_logging:
-            self.logger.info(
-                f"lasso paint: label = {target_label}, indices = {paint_indices}"  # noqa G004
-            )
+        # if self.extra_logging:
+        #     self.logger.info(
+        #         f"lasso paint: label = {target_label}, indices = {paint_indices}"  # noqa G004
+        #     )
 
         # print(f"Painted {np.sum(contained)} pixels with label {target_label}")
 
@@ -932,7 +930,7 @@ class ClickableLabel(QLabel):
 
     def mousePressEvent(self, event):
         self.clicked.emit(self.label_id)        
-
+        
 class EmbeddingPaintingWidget(QWidget):
     def __init__(self, app, parent=None):
         super().__init__(parent=parent)
@@ -945,22 +943,6 @@ class EmbeddingPaintingWidget(QWidget):
 
         self.legend_placeholder_index = 0
 
-        # Settings Group
-        settings_group = QGroupBox("Settings")
-        settings_layout = QVBoxLayout()
-
-        model_layout = QHBoxLayout()
-        model_label = QLabel("Select Model")
-        self.model_dropdown = QComboBox()
-        self.model_dropdown.addItems(["Random Forest", "XGBoost"])
-        model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_dropdown)
-        settings_layout.addLayout(model_layout)
-
-        self.add_features_button = QPushButton("Add Features")
-        self.add_features_button.clicked.connect(self.add_features)
-        settings_layout.addWidget(self.add_features_button)
-
         thickness_layout = QHBoxLayout()
         thickness_label = QLabel("Adjust Slice Thickness")
         self.thickness_slider = QSlider(Qt.Horizontal)
@@ -970,13 +952,10 @@ class EmbeddingPaintingWidget(QWidget):
         self.thickness_slider.setValue(10)
         thickness_layout.addWidget(thickness_label)
         thickness_layout.addWidget(self.thickness_slider)
-        settings_layout.addLayout(thickness_layout)
-
+        main_layout.addLayout(thickness_layout)
+        
         # Update layer contrast limits after thick slices has effect
         self.app.viewer.layers["Image"].reset_contrast_limits()
-
-        settings_group.setLayout(settings_layout)
-        main_layout.addWidget(settings_group)
 
         # Controls Group
         controls_group = QGroupBox("Controls")
@@ -1000,6 +979,14 @@ class EmbeddingPaintingWidget(QWidget):
         live_pred_layout.addWidget(self.live_pred_button)
         controls_layout.addLayout(live_pred_layout)
 
+        # Connect checkbox signals to actions
+        self.live_fit_checkbox.stateChanged.connect(self.on_live_fit_changed)
+        self.live_pred_checkbox.stateChanged.connect(self.on_live_pred_changed)
+
+        # Connect button clicks to actions
+        self.live_fit_button.clicked.connect(self.app.start_model_fit)
+        self.live_pred_button.clicked.connect(self.app.start_prediction)
+        
         # Export model
         self.export_model_button = QPushButton("Export Model")
         controls_layout.addWidget(self.export_model_button)
@@ -1043,14 +1030,6 @@ class EmbeddingPaintingWidget(QWidget):
         main_layout.addWidget(stats_summary_group)
 
         self.setLayout(main_layout)
-
-        # Connect checkbox signals to actions
-        self.live_fit_checkbox.stateChanged.connect(self.on_live_fit_changed)
-        self.live_pred_checkbox.stateChanged.connect(self.on_live_pred_changed)
-
-        # Connect button clicks to actions
-        self.live_fit_button.clicked.connect(self.app.start_model_fit)
-        self.live_pred_button.clicked.connect(self.app.start_prediction)
 
     def add_features(self):
         zarr_path = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -1192,10 +1171,15 @@ class EmbeddingPaintingWidget(QWidget):
             self.legend_placeholder_index, self.legend_group
         )
 
-    def activateLabel(self, label_id):
+    def activateLabel(self, current_label_id):
         painting_layer = self.app.get_painting_layer()
-        painting_layer.selected_label = label_id
-        self.updateLegendHighlighting()
+        painting_layer.selected_label = current_label_id
+
+        for label_id, label_edit in self.label_edits.items():
+            if label_id == current_label_id:
+                self.highlightLabel(label_edit)
+            else:
+                self.removeHighlightLabel(label_edit)
         
     def updateLegendHighlighting(self, selected_label_event):
         """Update highlighting of legend"""

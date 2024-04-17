@@ -3,6 +3,9 @@ from napari.layers.labels._labels_utils import (
     sphere_indices,
 )
 
+from qtpy.QtWidgets import (QApplication, QGroupBox, QVBoxLayout, QHBoxLayout,
+                            QLabel, QComboBox, QPushButton, QWidget, QCheckBox)
+from qtpy.QtCore import Slot, Qt
 
 def get_labels_colormap():
     """Return a colormap for distinct label colors based on:
@@ -71,7 +74,7 @@ def paint_maker(logger):
             int
         )
 
-        logger.info("paint: label = %s, indices = %s", new_label, mask_indices)
+        # logger.info("paint: label = %s, indices = %s", new_label, mask_indices)
 
         self._paint_indices(
             mask_indices, new_label, shape, dims_to_paint, slice_coord, refresh
@@ -81,3 +84,4 @@ def paint_maker(logger):
 
 def get_active_button_color():
     return "#AF8B38"
+
