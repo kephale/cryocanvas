@@ -179,12 +179,10 @@ class NapariCopickExplorer(QWidget):
         layer.editable = True
         self.viewer.layers.selection.active = layer
 
-    def get_complete_data_manager(self):
+    def get_complete_data_manager(self, all_pairs=False):
         datasets = []
         for run in self.root.runs:
             run_dir = run.static_path
-            config_path = os.path.join(run_dir, "dataset_config.json")
-
             voxel_spacing_dir = self.get_default_voxel_spacing_directory(run_dir)
             segmentation_dir = self.get_segmentations_directory(run_dir)
 
@@ -193,64 +191,150 @@ class NapariCopickExplorer(QWidget):
                 continue
 
             os.makedirs(segmentation_dir, exist_ok=True)
+
+            voxel_spacing = self.get_voxel_spacing()
             
+            # Reused paths for all datasets in a run
+            painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
+            prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
+
+            zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
+            image_feature_pairs = {}
+
+            # Locate all images and corresponding features
+            for dataset_path in zarr_datasets:
+                dataset_name = os.path.basename(dataset_path)
+                if dataset_name.endswith(".zarr") and not dataset_name.endswith("_features.zarr"):
+                    base_image_name = dataset_name.replace(".zarr", "")
+                    # Find corresponding feature files
+                    feature_files = [path for path in zarr_datasets if base_image_name in path and "_features.zarr" in path]
+                    for feature_path in feature_files:
+                        features_base_name = os.path.basename(feature_path).replace("_features.zarr", "")
+                        # Check if the image base name matches the start of the feature base name
+                        if features_base_name.startswith(base_image_name):
+                            image_feature_pairs[features_base_name] = {
+                                'image': os.path.join(dataset_path, "0"),  # Assuming highest resolution
+                                'features': feature_path
+                            }
+
+            # Handle either all pairs or only those specified by the configuration
+            config_path = os.path.join(run_dir, "dataset_config.json")
             if os.path.exists(config_path):
+                with open(config_path, 'r') as file:
+                    config = json.load(file)
+                    if 'painting' in config:
+                        painting_path = os.path.join(segmentation_dir, config['painting'])
+                    if 'prediction' in config:
+                        prediction_path = os.path.join(segmentation_dir, config['prediction'])
+
+            if not all_pairs:
                 with open(config_path, 'r') as file:
                     config = json.load(file)
                     image_path = os.path.join(voxel_spacing_dir, config['image'])
                     features_path = os.path.join(voxel_spacing_dir, config['features'])
-                    painting_path = os.path.join(segmentation_dir, config['painting'])
-                    prediction_path = os.path.join(segmentation_dir, config['prediction'])
+                    if 'painting' in config:
+                        painting_path = os.path.join(segmentation_dir, config['painting'])
+                    if 'prediction' in config:
+                        prediction_path = os.path.join(segmentation_dir, config['prediction'])
+
+                    # Load dataset with specific config paths
+                    dataset = DataSet.from_paths(
+                        image_path=image_path,
+                        features_path=features_path,
+                        labels_path=painting_path,
+                        segmentation_path=prediction_path,
+                        make_missing_datasets=True
+                    )
+                    datasets.append(dataset)
             else:
-                # Existing logic to find paths                
-                voxel_spacing = self.get_voxel_spacing()
+                # Load all available pairs
+                for base_name, paths in image_feature_pairs.items():
+                    dataset = DataSet.from_paths(
+                        image_path=paths['image'],
+                        features_path=paths['features'],
+                        labels_path=painting_path,
+                        segmentation_path=prediction_path,
+                        make_missing_datasets=True
+                    )
+                    datasets.append(dataset)
 
-                zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
-                image_path = None
-                features_path = None
-                painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
-                prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
+            print(f"Loaded datasets for run {run.name}")
 
-                for dataset_path in zarr_datasets:
-                    dataset_name = os.path.basename(dataset_path).lower()
-                    if "_features.zarr" in dataset_name:
-                        features_path = dataset_path
-                    elif "painting" in dataset_name:
-                        painting_path = dataset_path
-                    elif "prediction" in dataset_name:
-                        prediction_path = dataset_path
-                    else:
-                        # TODO hard coded to use highest resolution
-                        image_path = os.path.join(dataset_path, "0")
+        return DataManager(datasets=datasets)        
 
-                # Save paths to JSON
-                config = {
-                    'image': os.path.relpath(image_path, voxel_spacing_dir),
-                    'features': os.path.relpath(features_path, voxel_spacing_dir),
-                    'painting': os.path.relpath(painting_path, segmentation_dir),
-                    'prediction': os.path.relpath(prediction_path, segmentation_dir)
-                }
-                with open(config_path, 'w') as file:
-                    json.dump(config, file)
+    # Only train on config pairs
+    # def get_complete_data_manager(self, all_pairs=False):
+    #     datasets = []
+    #     for run in self.root.runs:
+    #         run_dir = run.static_path
+    #         config_path = os.path.join(run_dir, "dataset_config.json")
 
-            print(f"Fitting on paths:")
-            print(f"Image: {image_path}")
-            print(f"Features: {features_path}")
-            print(f"Painting: {painting_path}")
-            print(f"Prediction: {prediction_path}")
+    #         voxel_spacing_dir = self.get_default_voxel_spacing_directory(run_dir)
+    #         segmentation_dir = self.get_segmentations_directory(run_dir)
+
+    #         if not voxel_spacing_dir:
+    #             print(f"No Voxel Spacing directory found for run {run.name}.")
+    #             continue
+
+    #         os.makedirs(segmentation_dir, exist_ok=True)
+            
+    #         if os.path.exists(config_path):
+    #             with open(config_path, 'r') as file:
+    #                 config = json.load(file)
+    #                 image_path = os.path.join(voxel_spacing_dir, config['image'])
+    #                 features_path = os.path.join(voxel_spacing_dir, config['features'])
+    #                 painting_path = os.path.join(segmentation_dir, config['painting'])
+    #                 prediction_path = os.path.join(segmentation_dir, config['prediction'])
+    #         else:
+    #             # Existing logic to find paths                
+    #             voxel_spacing = self.get_voxel_spacing()
+
+    #             zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
+    #             image_path = None
+    #             features_path = None
+    #             painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
+    #             prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
+
+    #             for dataset_path in zarr_datasets:
+    #                 dataset_name = os.path.basename(dataset_path).lower()
+    #                 if "_features.zarr" in dataset_name:
+    #                     features_path = dataset_path
+    #                 elif "painting" in dataset_name:
+    #                     painting_path = dataset_path
+    #                 elif "prediction" in dataset_name:
+    #                     prediction_path = dataset_path
+    #                 else:
+    #                     # TODO hard coded to use highest resolution
+    #                     image_path = os.path.join(dataset_path, "0")
+
+    #             # Save paths to JSON
+    #             config = {
+    #                 'image': os.path.relpath(image_path, voxel_spacing_dir),
+    #                 'features': os.path.relpath(features_path, voxel_spacing_dir),
+    #                 'painting': os.path.relpath(painting_path, segmentation_dir),
+    #                 'prediction': os.path.relpath(prediction_path, segmentation_dir)
+    #             }
+    #             with open(config_path, 'w') as file:
+    #                 json.dump(config, file)
+
+    #         print(f"Fitting on paths:")
+    #         print(f"Image: {image_path}")
+    #         print(f"Features: {features_path}")
+    #         print(f"Painting: {painting_path}")
+    #         print(f"Prediction: {prediction_path}")
                     
-            # Load dataset with paths
-            if image_path and features_path:
-                dataset = DataSet.from_paths(
-                    image_path=image_path,
-                    features_path=features_path,
-                    labels_path=painting_path,
-                    segmentation_path=prediction_path,
-                    make_missing_datasets=True
-                )
-                datasets.append(dataset)
+    #         # Load dataset with paths
+    #         if image_path and features_path:
+    #             dataset = DataSet.from_paths(
+    #                 image_path=image_path,
+    #                 features_path=features_path,
+    #                 labels_path=painting_path,
+    #                 segmentation_path=prediction_path,
+    #                 make_missing_datasets=True
+    #             )
+    #             datasets.append(dataset)
 
-        return DataManager(datasets=datasets)
+    #     return DataManager(datasets=datasets)
 
     def get_default_voxel_spacing_directory(self, static_path):
         # Find VoxelSpacing directories, assuming a hard coded match for now
@@ -287,7 +371,8 @@ class NapariCopickExplorer(QWidget):
 
     @thread_worker
     def threaded_fit_on_all(self):
-        data_manager = self.get_complete_data_manager()
+        # Fit model on all pairs
+        data_manager = self.get_complete_data_manager(all_pairs=True)
 
         clf = RandomForestClassifier(
             n_estimators=50,

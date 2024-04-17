@@ -1185,6 +1185,8 @@ class EmbeddingPaintingWidget(QWidget):
                 self.highlightLabel(label_edit)
             else:
                 self.removeHighlightLabel(label_edit)
+
+        self.app.viewer.layers.selection.active = painting_layer
         
     def updateLegendHighlighting(self, selected_label_event):
         """Update highlighting of legend"""
