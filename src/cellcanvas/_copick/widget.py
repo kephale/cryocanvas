@@ -108,7 +108,7 @@ class NapariCopickExplorer(QWidget):
 
     def get_copick_colormap(self):
         """Return a colormap for distinct label colors based on the pickable objects."""
-        colormap = {obj.label: np.array(obj.color)/255.0 for obj in root.config.pickable_objects}
+        colormap = {obj.label: np.array(obj.color)/255.0 for obj in self.root.config.pickable_objects}
         colormap[None] = np.array([1, 1, 1, 1])
         colormap[9] = np.array([0, 1, 1, 1])
         return colormap
@@ -537,7 +537,7 @@ class NapariCopickExplorer(QWidget):
         points_array = np.array(points_locations) / 10
         
         # Adding the points layer to the viewer, using the pickable_object_name as the layer name
-        pickable_object = [obj for obj in root.config.pickable_objects if obj.name == picks.pickable_object_name][0]
+        pickable_object = [obj for obj in self.root.config.pickable_objects if obj.name == picks.pickable_object_name][0]
         self.viewer.add_points(points_array, name=picks.pickable_object_name, size=25, out_of_slice_display=True, face_color=np.array(pickable_object.color)/255.0)
 
     def open_tomogram(self, tomogram):
@@ -630,8 +630,8 @@ class NapariCopickExplorer(QWidget):
         # painting_layer.colormap.color_dict
         #  self.app.painting_labels
         self.cell_canvas_app.semantic_segmentor.set_colormap(self.get_copick_colormap())
-        self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in root.config.pickable_objects] + [9]
-        self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
+        self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in self.root.config.pickable_objects] + [9]
+        self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in self.root.config.pickable_objects}
 
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping[9] = 'background'
         self.cell_canvas_app.semantic_segmentor.widget.setupLegend()
