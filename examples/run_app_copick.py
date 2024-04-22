@@ -52,32 +52,6 @@ from cellcanvas.utils import get_active_button_color
 
 import dask.array as da
 
-# Project root
-root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
-# root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/chlamy_copick/copick_config_kyle.json")
-
-## Root API
-root.config # CopickConfig object
-root.runs # List of run objects (lazy loading from filesystem location(s))
-
-# TODO update to use root.config.pickable_objects
-
-
-def get_copick_colormap():
-    """Return a colormap for distinct label colors based on the pickable objects."""
-    colormap = {obj.label: np.array(obj.color)/255.0 for obj in root.config.pickable_objects}
-    colormap[None] = np.array([1, 1, 1, 1])
-    colormap[9] = np.array([0, 1, 1, 1])
-    return colormap
-
-cellcanvas.utils.get_labels_colormap = get_copick_colormap
-
-# Use the function
-colormap = get_copick_colormap()
-
-# TODO set names from copick config
-# cell_canvas.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
-
 import napari
 from qtpy.QtWidgets import QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 from qtpy.QtCore import Qt
@@ -129,6 +103,16 @@ class NapariCopickExplorer(QWidget):
 
         self.populate_tree()
 
+        # Monkeypatch
+        cellcanvas.utils.get_labels_colormap = self.get_copick_colormap
+
+    def get_copick_colormap(self):
+        """Return a colormap for distinct label colors based on the pickable objects."""
+        colormap = {obj.label: np.array(obj.color)/255.0 for obj in root.config.pickable_objects}
+        colormap[None] = np.array([1, 1, 1, 1])
+        colormap[9] = np.array([0, 1, 1, 1])
+        return colormap
+    
     def get_voxel_spacing(self):
         return 10
         
@@ -645,24 +629,32 @@ class NapariCopickExplorer(QWidget):
         # Set colormap
         # painting_layer.colormap.color_dict
         #  self.app.painting_labels
-        self.cell_canvas_app.semantic_segmentor.set_colormap(get_copick_colormap())
+        self.cell_canvas_app.semantic_segmentor.set_colormap(self.get_copick_colormap())
         self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in root.config.pickable_objects] + [9]
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in root.config.pickable_objects}
 
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping[9] = 'background'
         self.cell_canvas_app.semantic_segmentor.widget.setupLegend()
 
-viewer = napari.Viewer()
+if __name__ == "__main__":
+    # Project root
+    root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
+    # root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/chlamy_copick/copick_config_kyle.json")
 
-# Hide layer list and controls
-# viewer.window.qt_viewer.dockLayerList.setVisible(False)
-# viewer.window.qt_viewer.dockLayerControls.setVisible(False)
+    ## Root API
+    root.config # CopickConfig object
+    root.runs # List of run objects (lazy loading from filesystem location(s))
+        
+    viewer = napari.Viewer()
 
-copick_explorer_widget = NapariCopickExplorer(viewer, root)
-viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", area="left")
+    # Hide layer list and controls
+    # viewer.window.qt_viewer.dockLayerList.setVisible(False)
+    # viewer.window.qt_viewer.dockLayerControls.setVisible(False)
 
+    copick_explorer_widget = NapariCopickExplorer(viewer, root)
+    viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", area="left")
 
-# napari.run()
+    # napari.run()
 
 # TODO finish making the prediction computation more lazy
 # the strategy should be to start computing labels chunkwise
@@ -676,4 +668,3 @@ viewer.window.add_dock_widget(copick_explorer_widget, name="Copick Explorer", ar
 # - override exclusion of non-zero labels
 # - consistent colormap in the charts
 # - consistent colormap in the painted part of the labels image
-
