@@ -377,10 +377,10 @@ class EmbeddingPaintingApp:
         # Model fitting
         if model_type == "Random Forest":
             clf = RandomForestClassifier(
-                n_estimators=200,
+                n_estimators=100,
                 n_jobs=-1,
                 max_depth=15,
-                max_samples=0.1,
+                max_samples=0.05,
                 class_weight=weight_dict,
             )
             self.segmentation_manager.model = clf

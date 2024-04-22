@@ -180,8 +180,8 @@ class NapariCopickExplorer(QWidget):
             voxel_spacing = self.get_voxel_spacing()
             
             # Reused paths for all datasets in a run
-            painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
-            prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
+            painting_path = self.get_default_painting_path(segmentation_dir, voxel_spacing)
+            prediction_path = self.get_default_prediction_path(segmentation_dir, voxel_spacing)
 
             zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
             image_feature_pairs = {}
@@ -203,7 +203,7 @@ class NapariCopickExplorer(QWidget):
                             }
 
             # Handle either all pairs or only those specified by the configuration
-            config_path = os.path.join(run_dir, "dataset_config.json")
+            config_path = self.get_config_path(run.static_path)
             if os.path.exists(config_path):
                 with open(config_path, 'r') as file:
                     config = json.load(file)
@@ -212,7 +212,7 @@ class NapariCopickExplorer(QWidget):
                     if 'prediction' in config:
                         prediction_path = os.path.join(segmentation_dir, config['prediction'])
 
-            if not all_pairs:
+            if os.path.exists(config_path) and not all_pairs:
                 with open(config_path, 'r') as file:
                     config = json.load(file)
                     image_path = os.path.join(voxel_spacing_dir, config['image'])
@@ -469,7 +469,7 @@ class NapariCopickExplorer(QWidget):
         default_selections = {}
 
         # Check for config file and load selections if present
-        config_path = os.path.join(static_path, "dataset_config.json")
+        config_path = self.get_config_path(static_path)
         if os.path.exists(config_path):
             with open(config_path, 'r') as file:
                 config = json.load(file)
@@ -556,13 +556,28 @@ class NapariCopickExplorer(QWidget):
         # TODO scale is hard coded to 10 here
         self.viewer.add_image(zarr_store[0], name=f"Tomogram: {tomogram.name}")
 
+    def get_config_path(self, run_dir):
+        return os.path.join(run_dir, f"{self.get_user_id()}_config.json")
+        
+    def get_session_id(self):
+        return 17
+
+    def get_user_id(self):
+        return self.root.user_id
+        
+    def get_default_painting_path(self, segmentation_dir, voxel_spacing):
+        return os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_{self.get_user_id()}-cellcanvas-painting_{self.get_session_id()}_all-multilabel.zarr')
+
+    def get_default_prediction_path(self, segmentation_dir, voxel_spacing):
+        return os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_{self.get_user_id()}-cellcanvas-prediction_{self.get_session_id()}_all-multilabel.zarr')
+        
     def initialize_or_update_cell_canvas(self):
         # Collect paths from dropdowns
         paths = {layer: dropdown.currentText() for layer, dropdown in self.dropdowns.items()}
         
         if not paths["image"] or not paths["features"]:
             print("Please ensure image and feature paths are selected before initializing/updating CellCanvas.")
-            return        
+            return
 
         run_dir = self.selected_run.static_path
         segmentation_dir = self.get_segmentations_directory(self.selected_run.static_path)
@@ -573,8 +588,8 @@ class NapariCopickExplorer(QWidget):
         # Ensure segmentations directory exists
         os.makedirs(segmentation_dir, exist_ok=True)
         
-        default_painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
-        default_prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
+        default_painting_path = self.get_default_painting_path(segmentation_dir, voxel_spacing)
+        default_prediction_path = self.get_default_prediction_path(segmentation_dir, voxel_spacing)
 
         painting_path = default_painting_path if not paths["painting"] else os.path.join(segmentation_dir, paths["painting"])
         prediction_path = default_prediction_path if not paths["prediction"] else os.path.join(segmentation_dir, paths["prediction"])
@@ -599,7 +614,7 @@ class NapariCopickExplorer(QWidget):
             print(f"File {path} not found!", file=sys.stderr)
             return
 
-        config_path = os.path.join(run_dir, "dataset_config.json")
+        config_path = self.get_config_path(run_dir)
 
         config = {
             'image': os.path.relpath(os.path.join(voxel_spacing_dir, f"{paths['image']}"), voxel_spacing_dir),
