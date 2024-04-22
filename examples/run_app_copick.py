@@ -54,6 +54,7 @@ import dask.array as da
 
 # Project root
 root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
+# root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/chlamy_copick/copick_config_kyle.json")
 
 ## Root API
 root.config # CopickConfig object

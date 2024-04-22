@@ -294,9 +294,7 @@ class EmbeddingPaintingApp:
             self.start_prediction()
 
     def get_model_type(self):
-        if not self.model_type:
-            self.model_type = self.widget.model_dropdown.currentText()
-        return self.model_type
+        return "Random Forest"
 
     def get_corner_pixels(self):
         if self.corner_pixels is None:
