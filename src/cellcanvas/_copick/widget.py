@@ -630,10 +630,10 @@ class NapariCopickExplorer(QWidget):
         # painting_layer.colormap.color_dict
         #  self.app.painting_labels
         self.cell_canvas_app.semantic_segmentor.set_colormap(self.get_copick_colormap())
-        self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in self.root.config.pickable_objects] + [9]
+        self.cell_canvas_app.semantic_segmentor.painting_labels = [obj.label for obj in self.root.config.pickable_objects]
         self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping = {obj.label: obj.name for obj in self.root.config.pickable_objects}
 
-        self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping[9] = 'background'
+#        self.cell_canvas_app.semantic_segmentor.widget.class_labels_mapping[9] = 'background'
         self.cell_canvas_app.semantic_segmentor.widget.setupLegend()
 
 if __name__ == "__main__":
