@@ -110,7 +110,6 @@ class NapariCopickExplorer(QWidget):
         """Return a colormap for distinct label colors based on the pickable objects."""
         colormap = {obj.label: np.array(obj.color)/255.0 for obj in self.root.config.pickable_objects}
         colormap[None] = np.array([1, 1, 1, 1])
-        colormap[9] = np.array([0, 1, 1, 1])
         return colormap
     
     def get_voxel_spacing(self):
