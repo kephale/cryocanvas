@@ -110,11 +110,27 @@ class DataSet:
         # get the features
         features = zarr.open(features_store, "r")
 
+        group_name = "labels"
+        
         # get the labels
-        labels = zarr.open(labels_store, "a")
+        labels = zarr.open_group(labels_store,
+                                 mode="a")
+        if group_name in labels:
+            labels = labels[group_name]
+        else:
+            labels = labels.create_dataset(group_name,
+                                           shape=image.shape,
+                                           dtype="i4")
 
         # get the segmentation
-        segmentation = zarr.open(segmentation_store, mode="a")
+        segmentation = zarr.open_group(segmentation_store,
+                                       mode="a")
+        if group_name in segmentation:
+            segmentation = segmentation[group_name]
+        else:
+            segmentation = segmentation.create_dataset(group_name,
+                                                       shape=image.shape,
+                                                       dtype="i4")
 
         return cls(
             image=image,
