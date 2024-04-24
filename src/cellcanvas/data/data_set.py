@@ -108,7 +108,7 @@ class DataSet:
 
 
         # get the features
-        features = zarr.open(features_store, "r")
+        features = {"features": zarr.open(features_store, "r")}
 
         group_name = "labels"
         
