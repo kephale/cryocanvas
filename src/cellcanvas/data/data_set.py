@@ -89,3 +89,37 @@ class DataSet:
             labels=labels,
             segmentation=segmentation,
         )
+
+    @classmethod
+    def from_stores(
+        cls,
+        image_store,
+        features_store,
+        labels_store,
+        segmentation_store,
+    ):
+        """Create a DataSet from a set of paths.
+
+        todo: add ability to create missing labels/segmentations
+        """
+        # get the image
+        # TODO fix hardcoded scale for pickathon
+        image = zarr.open(image_store, "r")["0"]
+
+
+        # get the features
+        features = zarr.open(features_store, "r")
+
+        # get the labels
+        labels = zarr.open(labels_store, "a")
+
+        # get the segmentation
+        segmentation = zarr.open(segmentation_store, mode="a")
+
+        return cls(
+            image=image,
+            features=features,
+            labels=labels,
+            segmentation=segmentation,
+        )
+    

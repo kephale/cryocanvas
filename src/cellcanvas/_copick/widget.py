@@ -125,30 +125,42 @@ class NapariCopickExplorer(QWidget):
         streamHandler.setFormatter(formatter)
         self.logger.addHandler(streamHandler)
         
-
     def populate_tree(self):
+        self.tree.clear()  # Clear existing items if repopulating
         for run in self.root.runs:
             run_item = QTreeWidgetItem(self.tree, [run.name])
             run_item.setData(0, Qt.UserRole, run)
+            run_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
 
-            for category in ["segmentations", "meshes", "picks", "voxel_spacings"]:
-                category_item = QTreeWidgetItem(run_item, [category])
-                items = getattr(run, category)
-                for item in items:
-                    if category == "picks":
-                        item_name = item.pickable_object_name
-                    else:
-                        item_name = getattr(item, 'name', 'Unnamed')
+    def setup_signals(self):
+        self.tree.itemExpanded.connect(self.on_item_expanded)
 
-                    child_item = QTreeWidgetItem(category_item, [item_name])
-                    child_item.setData(0, Qt.UserRole, item)
+    def on_item_expanded(self, item):
+        # Check if the item has already been populated
+        if not hasattr(item, 'is_populated'):
+            run = item.data(0, Qt.UserRole)
+            if isinstance(run, copick.models.CopickRun):
+                self.populate_run(item, run)
+            item.is_populated = True  # Mark as populated
 
-                    # list tomograms
-                    if category == "voxel_spacings":
-                        for tomogram in item.tomograms:
-                            tomo_item = QTreeWidgetItem(child_item, [f"Tomogram: {tomogram.tomo_type}"])
-                            tomo_item.setData(0, Qt.UserRole, tomogram)
+    def populate_run(self, run_item, run):
+        for category in ["segmentations", "meshes", "picks", "voxel_spacings"]:
+            category_item = QTreeWidgetItem(run_item, [category])
+            items = getattr(run, category, [])
+            for item in items:
+                if category == "picks":
+                    item_name = item.pickable_object_name
+                else:
+                    item_name = getattr(item, 'name', 'Unnamed')
+                child_item = QTreeWidgetItem(category_item, [item_name])
+                child_item.setData(0, Qt.UserRole, item)
 
+                if category == "voxel_spacings":
+                    for tomogram in item.tomograms:
+                        tomo_item = QTreeWidgetItem(child_item, [f"Tomogram: {tomogram.tomo_type}"])
+                        tomo_item.setData(0, Qt.UserRole, tomogram)
+
+        
     def activate_layer(self, layer):
         print(f"Activating layer {layer}")
         if layer == "image":
@@ -167,8 +179,10 @@ class NapariCopickExplorer(QWidget):
         datasets = []
         for run in self.root.runs:
             run_dir = run.static_path
-            voxel_spacing_dir = self.get_default_voxel_spacing_directory(run_dir)
-            segmentation_dir = self.get_segmentations_directory(run_dir)
+            overlay_path = run.overlay_path
+            
+            voxel_spacing_dir = self.get_default_voxel_spacing_directory(run)
+            segmentation_dir = self.get_segmentations_directory(run)
 
             if not voxel_spacing_dir:
                 print(f"No Voxel Spacing directory found for run {run.name}.")
@@ -246,90 +260,16 @@ class NapariCopickExplorer(QWidget):
 
         return DataManager(datasets=datasets)        
 
-    # Only train on config pairs
-    # def get_complete_data_manager(self, all_pairs=False):
-    #     datasets = []
-    #     for run in self.root.runs:
-    #         run_dir = run.static_path
-    #         config_path = os.path.join(run_dir, "dataset_config.json")
-
-    #         voxel_spacing_dir = self.get_default_voxel_spacing_directory(run_dir)
-    #         segmentation_dir = self.get_segmentations_directory(run_dir)
-
-    #         if not voxel_spacing_dir:
-    #             print(f"No Voxel Spacing directory found for run {run.name}.")
-    #             continue
-
-    #         os.makedirs(segmentation_dir, exist_ok=True)
-            
-    #         if os.path.exists(config_path):
-    #             with open(config_path, 'r') as file:
-    #                 config = json.load(file)
-    #                 image_path = os.path.join(voxel_spacing_dir, config['image'])
-    #                 features_path = os.path.join(voxel_spacing_dir, config['features'])
-    #                 painting_path = os.path.join(segmentation_dir, config['painting'])
-    #                 prediction_path = os.path.join(segmentation_dir, config['prediction'])
-    #         else:
-    #             # Existing logic to find paths                
-    #             voxel_spacing = self.get_voxel_spacing()
-
-    #             zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
-    #             image_path = None
-    #             features_path = None
-    #             painting_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-painting_0_all-multilabel.zarr')
-    #             prediction_path = os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_cellcanvas-prediction_0_all-multilabel.zarr')
-
-    #             for dataset_path in zarr_datasets:
-    #                 dataset_name = os.path.basename(dataset_path).lower()
-    #                 if "_features.zarr" in dataset_name:
-    #                     features_path = dataset_path
-    #                 elif "painting" in dataset_name:
-    #                     painting_path = dataset_path
-    #                 elif "prediction" in dataset_name:
-    #                     prediction_path = dataset_path
-    #                 else:
-    #                     # TODO hard coded to use highest resolution
-    #                     image_path = os.path.join(dataset_path, "0")
-
-    #             # Save paths to JSON
-    #             config = {
-    #                 'image': os.path.relpath(image_path, voxel_spacing_dir),
-    #                 'features': os.path.relpath(features_path, voxel_spacing_dir),
-    #                 'painting': os.path.relpath(painting_path, segmentation_dir),
-    #                 'prediction': os.path.relpath(prediction_path, segmentation_dir)
-    #             }
-    #             with open(config_path, 'w') as file:
-    #                 json.dump(config, file)
-
-    #         print(f"Fitting on paths:")
-    #         print(f"Image: {image_path}")
-    #         print(f"Features: {features_path}")
-    #         print(f"Painting: {painting_path}")
-    #         print(f"Prediction: {prediction_path}")
-                    
-    #         # Load dataset with paths
-    #         if image_path and features_path:
-    #             dataset = DataSet.from_paths(
-    #                 image_path=image_path,
-    #                 features_path=features_path,
-    #                 labels_path=painting_path,
-    #                 segmentation_path=prediction_path,
-    #                 make_missing_datasets=True
-    #             )
-    #             datasets.append(dataset)
-
-    #     return DataManager(datasets=datasets)
-
-    def get_default_voxel_spacing_directory(self, static_path):
+    def get_default_voxel_spacing_directory(self, run):
         # Find VoxelSpacing directories, assuming a hard coded match for now
         voxel_spacing = self.get_voxel_spacing()
-        voxel_spacing_dirs = glob.glob(os.path.join(static_path, f'VoxelSpacing{voxel_spacing:.3f}'))
+        voxel_spacing_dirs = glob.glob(os.path.join(run.static_path, f'VoxelSpacing{voxel_spacing:.3f}'))
         if voxel_spacing_dirs:
             return voxel_spacing_dirs[0]
         return None
 
-    def get_segmentations_directory(self, static_path):
-        segmentation_dir = os.path.join(static_path, "Segmentations")
+    def get_segmentations_directory(self, run):
+        segmentation_dir = os.path.join(run.overlay_path, "Segmentations")
         return segmentation_dir
 
     def change_button_color(self, button, color):
@@ -445,6 +385,12 @@ class NapariCopickExplorer(QWidget):
 
             print(f"Predictions written")
 
+    def get_painting_segmentation_name(self):
+        return "cellcanvas-painting"
+
+    def get_prediction_segmentation_name(self):
+        return "cellcanvas-prediction"
+            
     def on_run_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
         if not isinstance(data, copick.impl.filesystem.CopickRunFSSpec):
@@ -453,64 +399,61 @@ class NapariCopickExplorer(QWidget):
 
         self.selected_run = data
         static_path = self.selected_run.static_path
-        self.logger.info(f"Selected {static_path}")
+        overlay_path = self.selected_run.overlay_path
+        self.logger.info(f"Selected static path: {static_path} overlay path: {overlay_path}")
 
         # Clear existing items
         for dropdown in self.dropdowns.values():
             dropdown.clear()
 
+        voxel_spacing = self.selected_run.get_voxel_spacing(self.get_voxel_spacing())
+        if not voxel_spacing:
+            print("Voxel spacing does not exist.")
+            return
+
+        # features = self.selected_run.get_voxel_spacing(10).tomograms[0].get_features("cellcanvas01")
+            
         # Define directories
-        voxel_spacing_dirs = glob.glob(os.path.join(static_path, "VoxelSpacing10*"))
-        segmentation_dir = self.get_segmentations_directory(static_path)
-        os.makedirs(segmentation_dir, exist_ok=True)
-
-        # Initialize dictionary to hold default selections from config
-        default_selections = {}
-
-        # Check for config file and load selections if present
-        config_path = self.get_config_path(static_path)
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as file:
-                config = json.load(file)
-            default_selections = {
-                'image': os.path.join(voxel_spacing_dirs[0], config.get('image')),
-                'features': os.path.join(voxel_spacing_dirs[0], config.get('features')),
-                'painting': os.path.join(segmentation_dir, config.get('painting')),
-                'prediction': os.path.join(segmentation_dir, config.get('prediction'))
-            }
+        voxel_spacing_dirs = voxel_spacing.static_path
 
         # Helper function to add items if not already in dropdown
         def add_item_if_not_exists(dropdown, item_name, item_data):
             if dropdown.findData(item_data) == -1:
                 dropdown.addItem(item_name, item_data)
 
-        # Load all zarr datasets from voxel spacing directories
-        if voxel_spacing_dirs:
-            for voxel_spacing_dir in voxel_spacing_dirs:
-                zarr_datasets = glob.glob(os.path.join(voxel_spacing_dir, "*.zarr"))
-                for dataset_path in zarr_datasets:
-                    dataset_name = os.path.basename(dataset_path)
-                    if "_features.zarr" in dataset_name.lower():
-                        add_item_if_not_exists(self.dropdowns["features"], dataset_name, dataset_path)
-                    else:
-                        add_item_if_not_exists(self.dropdowns["image"], dataset_name + "/0", dataset_path + "/0")
+        # Load image/tomograms
+        tomograms = voxel_spacing.tomograms
+        for tomogram in tomograms:
+            add_item_if_not_exists(self.dropdowns["image"],
+                                   tomogram.tomo_type,
+                                   tomogram)
 
-        # Load all zarr datasets from segmentation directory
-        zarr_datasets = glob.glob(os.path.join(segmentation_dir, "*.zarr"))
-        for dataset_path in zarr_datasets:
-            dataset_name = os.path.basename(dataset_path)
-            if "painting" not in dataset_name.lower():
-                add_item_if_not_exists(self.dropdowns["prediction"], dataset_name, dataset_path)
-            if "prediction" not in dataset_name.lower():
-                add_item_if_not_exists(self.dropdowns["painting"], dataset_name, dataset_path)
+        # Load features
+        for tomogram in tomograms:
+            features = tomogram.features
+            if features:
+                feature = features[0]
+                add_item_if_not_exists(self.dropdowns["features"],
+                                       tomogram.tomo_type,
+                                       feature)
 
-        # Set default selections in dropdowns if specified in the config
-        for key, dropdown in self.dropdowns.items():
-            if default_selections.get(key):
-                index = dropdown.findData(default_selections[key])
-                if index != -1:
-                    dropdown.setCurrentIndex(index)
+        # Painting
+        painting_seg = self.selected_run.get_segmentations(user_id=self.root.user_id, is_multilabel=True, name=self.get_painting_segmentation_name(), voxel_size=10)
+        if not painting_seg:
+            # Create seg
+            painting_seg = self.selected_run.new_segmentation(10, self.get_painting_segmentation_name(), self.get_session_id(), True, user_id=self.root.user_id)
+        else:
+            painting_seg = painting_seg[0]
+        add_item_if_not_exists(self.dropdowns["painting"], painting_seg.name, painting_seg)
 
+        # Prediction
+        prediction_seg = self.selected_run.get_segmentations(user_id=self.root.user_id, is_multilabel=True, name=self.get_prediction_segmentation_name(), voxel_size=10)
+        if not prediction_seg:
+            # Create seg
+            prediction_seg = self.selected_run.new_segmentation(10, self.get_prediction_segmentation_name(), self.get_session_id(), True, user_id=self.root.user_id)
+        else:
+            prediction_seg = prediction_seg[0]
+        add_item_if_not_exists(self.dropdowns["prediction"], prediction_seg.name, prediction_seg)
 
     def on_item_clicked(self, item, column):
         data = item.data(0, Qt.UserRole)
@@ -533,7 +476,7 @@ class NapariCopickExplorer(QWidget):
         ]
 
         # TODO hard coded scaling
-        points_array = np.array(points_locations) / 10
+        points_array = np.array(points_locations) / self.get_voxel_spacing()
         
         # Adding the points layer to the viewer, using the pickable_object_name as the layer name
         pickable_object = [obj for obj in self.root.config.pickable_objects if obj.name == picks.pickable_object_name][0]
@@ -564,66 +507,37 @@ class NapariCopickExplorer(QWidget):
     def get_user_id(self):
         return self.root.user_id
         
-    def get_default_painting_path(self, segmentation_dir, voxel_spacing):
-        return os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_{self.get_user_id()}-cellcanvas-painting_{self.get_session_id()}_all-multilabel.zarr')
-
-    def get_default_prediction_path(self, segmentation_dir, voxel_spacing):
-        return os.path.join(segmentation_dir, f'{voxel_spacing:.3f}_{self.get_user_id()}-cellcanvas-prediction_{self.get_session_id()}_all-multilabel.zarr')
-        
     def initialize_or_update_cell_canvas(self):
         # Collect paths from dropdowns
-        paths = {layer: dropdown.currentText() for layer, dropdown in self.dropdowns.items()}
+        paths = {layer: dropdown.currentData() for layer, dropdown in self.dropdowns.items()}
         
         if not paths["image"] or not paths["features"]:
             print("Please ensure image and feature paths are selected before initializing/updating CellCanvas.")
             return
 
         run_dir = self.selected_run.static_path
-        segmentation_dir = self.get_segmentations_directory(self.selected_run.static_path)
-        voxel_spacing_dir = self.get_default_voxel_spacing_directory(self.selected_run.static_path)
+        overlay_path = self.selected_run.overlay_path
+        
+        segmentation_dir = self.get_segmentations_directory(self.selected_run)
+        voxel_spacing_dir = self.get_default_voxel_spacing_directory(self.selected_run)
 
         voxel_spacing = self.get_voxel_spacing()
 
         # Ensure segmentations directory exists
-        os.makedirs(segmentation_dir, exist_ok=True)
-        
-        default_painting_path = self.get_default_painting_path(segmentation_dir, voxel_spacing)
-        default_prediction_path = self.get_default_prediction_path(segmentation_dir, voxel_spacing)
-
-        painting_path = default_painting_path if not paths["painting"] else os.path.join(segmentation_dir, paths["painting"])
-        prediction_path = default_prediction_path if not paths["prediction"] else os.path.join(segmentation_dir, paths["prediction"])
-        image_path = os.path.join(voxel_spacing_dir, paths['image'])
-        features_path = os.path.join(voxel_spacing_dir, paths["features"])
+        # os.makedirs(segmentation_dir, exist_ok=True)
         
         # TODO note this is hard coded to use the highest resolution of a multiscale zarr
         print(f"Opening paths:")
-        print(f"Image: {image_path}")
-        print(f"Features: {features_path}")
-        print(f"Painting: {painting_path}")
-        print(f"Prediction: {prediction_path}")
-        try:
-            dataset = DataSet.from_paths(
-                image_path=image_path,
-                features_path=features_path,
-                labels_path=painting_path,
-                segmentation_path=prediction_path,
-                make_missing_datasets=True,
-            )
-        except FileNotFoundError:
-            print(f"File {path} not found!", file=sys.stderr)
-            return
-
-        config_path = self.get_config_path(run_dir)
-
-        config = {
-            'image': os.path.relpath(os.path.join(voxel_spacing_dir, f"{paths['image']}"), voxel_spacing_dir),
-            'features': os.path.relpath(os.path.join(voxel_spacing_dir, paths["features"]), voxel_spacing_dir),
-            'painting': os.path.relpath(painting_path, segmentation_dir),
-            'prediction': os.path.relpath(prediction_path, segmentation_dir)
-        }
-
-        with open(config_path, 'w') as file:
-            json.dump(config, file)
+        print(f"Image: {paths['image']}")
+        print(f"Features: {paths['features']}")
+        print(f"Painting: {paths['painting']}")
+        print(f"Prediction: {paths['prediction']}")
+        dataset = DataSet.from_stores(
+            image_store=paths['image'].zarr(),
+            features_store=paths['features'].zarr(),
+            labels_store=paths['painting'].zarr(),
+            segmentation_store=paths['prediction'].zarr(),
+        )
         
         data_manager = DataManager(datasets=[dataset])
         
@@ -652,12 +566,10 @@ class NapariCopickExplorer(QWidget):
 
 if __name__ == "__main__":
     # Project root
-    root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
+    
+    # root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_kyle.json")
     # root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/chlamy_copick/copick_config_kyle.json")
-
-    ## Root API
-    root.config # CopickConfig object
-    root.runs # List of run objects (lazy loading from filesystem location(s))
+    root = CopickRootFSSpec.from_file("/Volumes/kish@CZI.T7/demo_project/copick_config_pickathon.json")
         
     viewer = napari.Viewer()
 
@@ -670,15 +582,3 @@ if __name__ == "__main__":
 
     # napari.run()
 
-# TODO finish making the prediction computation more lazy
-# the strategy should be to start computing labels chunkwise
-# on the zarr itself
-
-# TODO check scaling between picks and zarrs
-
-# TODO check why painting doesn't work when using proper scaling
-
-# TODO add proper colormap and legend support
-# - override exclusion of non-zero labels
-# - consistent colormap in the charts
-# - consistent colormap in the painted part of the labels image
