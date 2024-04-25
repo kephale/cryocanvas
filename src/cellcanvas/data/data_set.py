@@ -102,18 +102,20 @@ class DataSet:
 
         todo: add ability to create missing labels/segmentations
         """
+
+        # TODO rewrite this to copy everything to be local
+        
         # get the image
         # TODO fix hardcoded scale for pickathon
-        image = zarr.open(image_store, "r")["0"]
-
+        image = zarr.open(zarr.storage.LRUStoreCache(image_store, None), "r")["0"]
 
         # get the features
-        features = {"features": zarr.open(features_store, "r")}
+        features = {"features": zarr.open(zarr.storage.LRUStoreCache(features_store, None), "r")}
 
         group_name = "labels"
         
         # get the labels
-        labels = zarr.open_group(labels_store,
+        labels = zarr.open_group(zarr.storage.LRUStoreCache(labels_store, None),
                                  mode="a")
         if group_name in labels:
             labels = labels[group_name]
@@ -123,7 +125,7 @@ class DataSet:
                                            dtype="i4")
 
         # get the segmentation
-        segmentation = zarr.open_group(segmentation_store,
+        segmentation = zarr.open_group(zarr.storage.LRUStoreCache(segmentation_store, None),
                                        mode="a")
         if group_name in segmentation:
             segmentation = segmentation[group_name]
@@ -132,6 +134,8 @@ class DataSet:
                                                        shape=image.shape,
                                                        dtype="i4")
 
+        # TODO start a background thread that triggers downloads of the zarrs
+            
         return cls(
             image=image,
             features=features,
