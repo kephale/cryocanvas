@@ -30,6 +30,11 @@ class CellCanvasApp:
             extra_logging=self.verbose,
         )
 
+
+    def update_data_manager(self, data: DataManager):
+        self.data = data
+        self.semantic_segmentor.update_data_manager(data)
+        
     @property
     def mode(self) -> AppMode:
         return self._mode

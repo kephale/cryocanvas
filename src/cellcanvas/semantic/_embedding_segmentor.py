@@ -7,6 +7,7 @@ import joblib
 import matplotlib.pyplot as plt
 import napari
 import numpy as np
+import dask.array as da
 import toolz as tz
 import zarr
 from matplotlib.backends.backend_qt5agg import (
@@ -18,7 +19,7 @@ from matplotlib.widgets import LassoSelector
 from napari.qt.threading import thread_worker
 from napari.utils import DirectLabelColormap
 from psygnal import debounced
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal, Slot
 from qtpy.QtGui import QColor, QPainter, QPixmap
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -34,6 +35,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qtpy import QtCore, QtWidgets
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.utils.class_weight import compute_class_weight
@@ -45,6 +47,8 @@ from cellcanvas.semantic.segmentation_manager import (
     SemanticSegmentationManager,
 )
 from cellcanvas.utils import get_labels_colormap, paint_maker
+
+import xgboost as xgb
 
 ACTIVE_BUTTON_COLOR = "#AF8B38"
 
@@ -59,11 +63,23 @@ class EmbeddingPaintingApp:
 
         self.extra_logging = extra_logging
         self.data = data_manager
-        clf = RandomForestClassifier(
-            n_estimators=50,
-            n_jobs=-1,
-            max_depth=10,
-            max_samples=0.05,
+        self.colormap = get_labels_colormap()
+        # clf = RandomForestClassifier(
+        #     n_estimators=25,
+        #     n_jobs=-1,
+        #     max_depth=10,
+        #     max_samples=0.05,
+        #     max_features='sqrt',
+        #     class_weight='balanced'
+        # )
+
+        clf = xgb.XGBClassifier(
+            objective='multi:softmax',
+            num_class=10,  # Specify number of classes if using softmax
+            n_estimators=200,
+            max_depth=20,
+            learning_rate=0.1,
+            scale_pos_weight='balanced'  # For handling imbalance
         )
         self.segmentation_manager = SemanticSegmentationManager(
             data=self.data, model=clf
@@ -90,13 +106,34 @@ class EmbeddingPaintingApp:
         #     self.logger.info(f"zarr_path: {zarr_path}")
 
         self._add_threading_workers()
-        self._init_viewer_layers()
+        self.update_data_manager(self.data)
         self._add_widget()
         self.model = None
 
         # Initialize plots
         self.start_computing_embedding_plot()
         self.update_class_distribution_charts()
+
+    def set_colormap(self, colormap):
+        self.colormap = colormap
+        
+        self.prediction_layer.colormap = DirectLabelColormap(color_dict=colormap)
+        self.painting_layer.colormap = DirectLabelColormap(color_dict=colormap)
+        self.update_class_distribution_charts()
+
+    def update_data_manager(self, data: DataManager):
+        self.data = data
+        self.segmentation_manager.update_data_manager(data)
+
+        # get the image and features
+        # todo this is temporarily assuming a single dataset
+        # need to generalize
+        self.image_data = self.data.datasets[0].image
+        self.features = self.data.datasets[0].features
+
+        # TODO remove old layers
+        self.viewer.layers.clear()
+        self._init_viewer_layers()
 
     def reshape_features(self, arr):
         return arr.reshape(-1, arr.shape[-1])
@@ -112,6 +149,8 @@ class EmbeddingPaintingApp:
         self.data_layer = self.viewer.add_image(
             self.image_data, name="Image", projection_mode="mean"
         )
+        self.data_layer._keep_auto_contrast = True
+        self.data_layer.refresh()
         # self.prediction_data = zarr.open(
         #     f"{self.zarr_path}/prediction",
         #     mode="a",
@@ -125,7 +164,7 @@ class EmbeddingPaintingApp:
             name="Prediction",
             scale=self.data_layer.scale,
             opacity=0.1,
-            colormap=DirectLabelColormap(color_dict=get_labels_colormap()),
+            colormap=DirectLabelColormap(color_dict=self.colormap),
         )
 
         # self.painting_data = zarr.open(
@@ -136,11 +175,12 @@ class EmbeddingPaintingApp:
         #     dimension_separator=".",
         # )
         self.painting_data = self.data.datasets[0].labels
+        # .data.astype("i4")
         self.painting_layer = self.viewer.add_labels(
             self.painting_data,
             name="Painting",
             scale=self.data_layer.scale,
-            colormap=DirectLabelColormap(color_dict=get_labels_colormap()),
+            colormap=DirectLabelColormap(color_dict=self.colormap),
         )
 
         # Set up painting logging
@@ -183,7 +223,7 @@ class EmbeddingPaintingApp:
             listener.connect(
                 debounced(
                     ensure_main_thread(on_data_change_handler),
-                    timeout=1000,
+                    timeout=5000,
                 )
             )
 
@@ -209,7 +249,9 @@ class EmbeddingPaintingApp:
         self.corner_pixels = self.viewer.layers["Image"].corner_pixels
 
         # TODO check if this is stalling things
-        self.painting_labels, self.painting_counts = np.unique(
+        # TODO recheck this after copick
+        # self.painting_labels, self.painting_counts = np.unique(
+        _, self.painting_counts = np.unique(
             self.painting_data[:], return_counts=True
         )
 
@@ -220,7 +262,7 @@ class EmbeddingPaintingApp:
         self.update_class_distribution_charts()
 
         # Update projection
-        self.start_computing_embedding_plot()
+        # self.start_computing_embedding_plot()
 
         self.widget.setupLegend()
 
@@ -238,7 +280,9 @@ class EmbeddingPaintingApp:
         self.logger.info(f"Labels data has changed! {event}")  # noqa: G004
 
         # Update stats
-        self.painting_labels, self.painting_counts = np.unique(
+        # TODO check after copick
+        # self.painting_labels, self.painting_counts = np.unique(
+        _, self.painting_counts = np.unique(
             self.painting_data[:], return_counts=True
         )
 
@@ -250,9 +294,7 @@ class EmbeddingPaintingApp:
             self.start_prediction()
 
     def get_model_type(self):
-        if not self.model_type:
-            self.model_type = self.widget.model_dropdown.currentText()
-        return self.model_type
+        return "Random Forest"
 
     def get_corner_pixels(self):
         if self.corner_pixels is None:
@@ -320,13 +362,14 @@ class EmbeddingPaintingApp:
         if filtered_labels.size == 0:
             self.logger.info("No labels present. Skipping model update.")
             return None
-
+        
         # Calculate class weights
         unique_labels = np.unique(filtered_labels)
         class_weights = compute_class_weight(
             "balanced", classes=unique_labels, y=filtered_labels
         )
         weight_dict = dict(zip(unique_labels, class_weights))
+        self.logger.info(f"Class balance calculated {class_weights}")
 
         # Apply weights
         # sample_weights = np.vectorize(weight_dict.get)(filtered_labels)
@@ -334,13 +377,15 @@ class EmbeddingPaintingApp:
         # Model fitting
         if model_type == "Random Forest":
             clf = RandomForestClassifier(
-                n_estimators=50,
+                n_estimators=100,
                 n_jobs=-1,
-                max_depth=10,
+                max_depth=15,
                 max_samples=0.05,
                 class_weight=weight_dict,
             )
             self.segmentation_manager.model = clf
+            # self.segmentation_manager.fit()
+            self.logger.info(f"Starting model fitting")
             self.segmentation_manager.fit()
             return self.segmentation_manager.model
         elif model_type == "XGBoost":
@@ -358,26 +403,49 @@ class EmbeddingPaintingApp:
             raise ValueError(f"Unsupported model type: {model_type}")
 
     def predict(self):
-        # We shift labels + 1 because background is 0 and has special meaning
-        # prediction = (
-        #         future.predict_segmenter(
-        #             features.reshape(-1, features.shape[-1]), model
-        #         ).reshape(features.shape[:-1])
-        #         + 1
-        # )
-        prediction = (
-            self.segmentation_manager.predict(
-                np.asarray(self.data.datasets[0].concatenated_features)
-            )
-            + 1
-        )
+        dataset_features = da.asarray(self.data.datasets[0].concatenated_features)
+        chunk_shape = dataset_features.chunksize
+        shape = dataset_features.shape
+        dtype = dataset_features.dtype
+        
+        # Placeholder for aggregated labels and counts
+        all_labels = []
+        all_counts = []
+        
+        # Iterate over chunks
+        for z in range(0, shape[1], chunk_shape[1]):
+            for y in range(0, shape[2], chunk_shape[2]):
+                for x in range(0, shape[3], chunk_shape[3]):
+                    # Compute the slice for the current chunk
+                    # in feature,z,y,x order
+                    chunk_slice = (
+                        slice(None),
+                        slice(z, min(z + chunk_shape[1], shape[1])),
+                        slice(y, min(y + chunk_shape[2], shape[2])),
+                        slice(x, min(x + chunk_shape[3], shape[3])),                        
+                    )
+                    print(f"Predicting on chunk {chunk_slice}")
+                    
+                    # Extract the current chunk
+                    chunk = dataset_features[chunk_slice].compute()
+                    
+                    # Predict on the chunk (adding 1 to each prediction)
+                    predicted_chunk = self.segmentation_manager.predict(chunk) + 1
+                    
+                    # Write the prediction to the corresponding region in the Zarr array
+                    self.prediction_data[chunk_slice[1:]] = predicted_chunk
+                    
+                    # Aggregate labels and counts
+                    labels, counts = np.unique(predicted_chunk, return_counts=True)
+                    all_labels.append(labels)
+                    all_counts.append(counts)
 
-        # Compute stats in thread too
-        prediction_labels, prediction_counts = np.unique(
-            prediction, return_counts=True
-        )
+        # Combine all_labels and all_counts
+        unique_labels, inverse = np.unique(np.concatenate(all_labels), return_inverse=True)
+        total_counts = np.bincount(inverse, weights=np.concatenate(all_counts))
 
-        return (prediction, prediction_labels, prediction_counts)
+        # Now, self.prediction_data should contain the predicted labels
+        return self.prediction_data, unique_labels, total_counts
 
     @thread_worker
     def prediction_thread(self):
@@ -402,6 +470,8 @@ class EmbeddingPaintingApp:
 
         # features = self.get_features()
 
+        # TODO use a yielded connect worker
+        
         self.prediction_worker = self.prediction_thread()
         self.prediction_worker.returned.connect(self.on_prediction_completed)
         self.prediction_worker.start()
@@ -414,9 +484,6 @@ class EmbeddingPaintingApp:
         self.prediction_labels = prediction_labels
         self.prediction_counts = prediction_counts
 
-        self.get_prediction_layer().data = self.prediction_data.reshape(
-            self.get_prediction_layer().data.shape
-        )
         self.get_prediction_layer().refresh()
 
         self.update_class_distribution_charts()
@@ -442,7 +509,6 @@ class EmbeddingPaintingApp:
 
         self.model_fit_worker = self.model_fit_thread(self.get_model_type())
         self.model_fit_worker.returned.connect(self.on_model_fit_completed)
-        # TODO update UI to indicate that model training has started
         self.model_fit_worker.start()
 
     def on_model_fit_completed(self, model):
@@ -468,16 +534,23 @@ class EmbeddingPaintingApp:
             else 1
         )
 
-        painting_counts = (
-            self.painting_counts
-            if self.painting_counts is not None
-            else np.array([0])
-        )
-        painting_labels = (
-            self.painting_labels
-            if self.painting_labels is not None
-            else np.array([0])
-        )
+        # Initialize counts for all labels in painting_labels with zero
+        if self.painting_labels is not None:
+            unique_labels = np.unique(self.painting_labels)
+            painting_counts_dict = {label: 0 for label in unique_labels}
+        else:
+            unique_labels = np.array([0])
+            painting_counts_dict = {0: 0}
+
+        # Update counts from existing painting_counts if available
+        if self.painting_counts is not None and self.painting_labels is not None:
+            for label, count in zip(self.painting_labels, self.painting_counts):
+                painting_counts_dict[label] = count
+
+        # Create arrays from the dictionary
+        painting_labels = np.array(list(painting_counts_dict.keys()))
+        painting_counts = np.array(list(painting_counts_dict.values()))
+
         prediction_counts = (
             self.prediction_counts
             if self.prediction_counts is not None
@@ -501,9 +574,6 @@ class EmbeddingPaintingApp:
             )
             self.logger.info(
                 f"image layer: contrast_limits = {self.viewer.layers['Image'].contrast_limits}, opacity = {self.viewer.layers['Image'].opacity}, gamma = {self.viewer.layers['Image'].gamma}"  # noqa G004
-            )
-            self.logger.info(
-                f"Current model type: {self.widget.model_dropdown.currentText()}"  # noqa G004
             )
 
         # Calculate percentages instead of raw counts
@@ -547,7 +617,7 @@ class EmbeddingPaintingApp:
         # Example class to color mapping
         class_color_mapping = {
             label: f"#{int(rgba[0] * 255):02x}{int(rgba[1] * 255):02x}{int(rgba[2] * 255):02x}"
-            for label, rgba in get_labels_colormap().items()
+            for label, rgba in self.colormap.items()
         }
 
         self.widget.figure.clear()
@@ -672,6 +742,8 @@ class EmbeddingPaintingApp:
     def compute_embedding_projection(self):
         # Filter out entries where the label is 0
         filtered_features, filtered_labels = self.data.get_training_data()
+        filtered_features = filtered_features.compute()
+        filtered_labels = filtered_labels.compute()
 
         # label values are offset by 1 for training,
         # undo the offset.
@@ -733,7 +805,7 @@ class EmbeddingPaintingApp:
             label: "#{:02x}{:02x}{:02x}".format(
                 int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
             )
-            for label, rgba in get_labels_colormap().items()
+            for label, rgba in self.colormap.items()
         }
 
         # Convert filtered_labels to a list of colors for each point
@@ -840,14 +912,23 @@ class EmbeddingPaintingApp:
             # Update the painting data
             self.painting_data[z, y, x] = target_label
 
-        if self.extra_logging:
-            self.logger.info(
-                f"lasso paint: label = {target_label}, indices = {paint_indices}"  # noqa G004
-            )
+        # if self.extra_logging:
+        #     self.logger.info(
+        #         f"lasso paint: label = {target_label}, indices = {paint_indices}"  # noqa G004
+        #     )
 
         # print(f"Painted {np.sum(contained)} pixels with label {target_label}")
 
+class ClickableLabel(QLabel):
+    clicked = Signal(int)  # Emits the label ID
 
+    def __init__(self, label_id, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.label_id = label_id
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.label_id)        
+        
 class EmbeddingPaintingWidget(QWidget):
     def __init__(self, app, parent=None):
         super().__init__(parent=parent)
@@ -860,22 +941,6 @@ class EmbeddingPaintingWidget(QWidget):
 
         self.legend_placeholder_index = 0
 
-        # Settings Group
-        settings_group = QGroupBox("Settings")
-        settings_layout = QVBoxLayout()
-
-        model_layout = QHBoxLayout()
-        model_label = QLabel("Select Model")
-        self.model_dropdown = QComboBox()
-        self.model_dropdown.addItems(["Random Forest", "XGBoost"])
-        model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_dropdown)
-        settings_layout.addLayout(model_layout)
-
-        self.add_features_button = QPushButton("Add Features")
-        self.add_features_button.clicked.connect(self.add_features)
-        settings_layout.addWidget(self.add_features_button)
-
         thickness_layout = QHBoxLayout()
         thickness_label = QLabel("Adjust Slice Thickness")
         self.thickness_slider = QSlider(Qt.Horizontal)
@@ -885,13 +950,10 @@ class EmbeddingPaintingWidget(QWidget):
         self.thickness_slider.setValue(10)
         thickness_layout.addWidget(thickness_label)
         thickness_layout.addWidget(self.thickness_slider)
-        settings_layout.addLayout(thickness_layout)
-
+        main_layout.addLayout(thickness_layout)
+        
         # Update layer contrast limits after thick slices has effect
         self.app.viewer.layers["Image"].reset_contrast_limits()
-
-        settings_group.setLayout(settings_layout)
-        main_layout.addWidget(settings_group)
 
         # Controls Group
         controls_group = QGroupBox("Controls")
@@ -915,9 +977,23 @@ class EmbeddingPaintingWidget(QWidget):
         live_pred_layout.addWidget(self.live_pred_button)
         controls_layout.addLayout(live_pred_layout)
 
+        # Connect checkbox signals to actions
+        self.live_fit_checkbox.stateChanged.connect(self.on_live_fit_changed)
+        self.live_pred_checkbox.stateChanged.connect(self.on_live_pred_changed)
+
+        # Connect button clicks to actions
+        self.live_fit_button.clicked.connect(self.app.start_model_fit)
+        self.live_pred_button.clicked.connect(self.app.start_prediction)
+        
+        # Export model
         self.export_model_button = QPushButton("Export Model")
         controls_layout.addWidget(self.export_model_button)
         self.export_model_button.clicked.connect(self.export_model)
+
+        # Import model
+        self.import_model_button = QPushButton("Import Model")
+        controls_layout.addWidget(self.import_model_button)
+        self.import_model_button.clicked.connect(self.import_model)        
 
         controls_group.setLayout(controls_layout)
         main_layout.addWidget(controls_group)
@@ -948,18 +1024,15 @@ class EmbeddingPaintingWidget(QWidget):
         self.embedding_canvas = FigureCanvas(self.embedding_figure)
         self.stats_summary_layout.addWidget(self.embedding_canvas)
 
+        # Create a button for computing the embedding plot
+        self.compute_embedding_button = QPushButton("Compute Embedding Plot")
+        self.compute_embedding_button.clicked.connect(self.app.start_computing_embedding_plot)
+        self.stats_summary_layout.addWidget(self.compute_embedding_button)
+
         stats_summary_group.setLayout(self.stats_summary_layout)
         main_layout.addWidget(stats_summary_group)
 
         self.setLayout(main_layout)
-
-        # Connect checkbox signals to actions
-        self.live_fit_checkbox.stateChanged.connect(self.on_live_fit_changed)
-        self.live_pred_checkbox.stateChanged.connect(self.on_live_pred_changed)
-
-        # Connect button clicks to actions
-        self.live_fit_button.clicked.connect(self.app.start_model_fit)
-        self.live_pred_button.clicked.connect(self.app.start_prediction)
 
     def add_features(self):
         zarr_path = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -992,6 +1065,23 @@ class EmbeddingPaintingWidget(QWidget):
                 self, "Model Export", "No model available to export."
             )
 
+    def import_model(self):
+        filePath, _ = QFileDialog.getOpenFileName(
+            self, "Open Model", "", "Joblib Files (*.joblib)"
+        )
+        if filePath:
+            try:
+                model = joblib.load(filePath)
+                self.app.model = model
+                QMessageBox.information(
+                    self, "Model Import", "Model imported successfully!"
+                )
+                print(f"Loaded model file from: {filePath}")
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Model Import", f"Failed to import model. Error: {str(e)}"
+                )
+            
     def change_embedding_label_color(self, color):
         """Change the background color of the embedding label."""
         self.embedding_label.setStyleSheet(f"background-color: {color};")
@@ -1040,7 +1130,7 @@ class EmbeddingPaintingWidget(QWidget):
                 color = painting_layer.colormap.color_dict[label_id]
 
                 # Create a QLabel for color swatch
-                color_swatch = QLabel()
+                color_swatch = ClickableLabel(label_id)
                 pixmap = QPixmap(16, 16)
 
                 if color is None:
@@ -1049,6 +1139,7 @@ class EmbeddingPaintingWidget(QWidget):
                     pixmap.fill(QColor(*[int(c * 255) for c in color]))
 
                 color_swatch.setPixmap(pixmap)
+                color_swatch.clicked.connect(self.activateLabel)
 
                 # Update the mapping with new classes or use the existing name
                 if label_id not in self.class_labels_mapping:
@@ -1061,7 +1152,7 @@ class EmbeddingPaintingWidget(QWidget):
                 label_edit = QLineEdit(label_name)
 
                 # Highlight the label if it is currently being used
-                if label_id == painting_layer._selected_label:
+                if label_id == painting_layer.selected_label:
                     self.highlightLabel(label_edit)
 
                 # Save changes to class labels back to the mapping
@@ -1083,6 +1174,18 @@ class EmbeddingPaintingWidget(QWidget):
             self.legend_placeholder_index, self.legend_group
         )
 
+    def activateLabel(self, current_label_id):
+        painting_layer = self.app.get_painting_layer()
+        painting_layer.selected_label = current_label_id
+
+        for label_id, label_edit in self.label_edits.items():
+            if label_id == current_label_id:
+                self.highlightLabel(label_edit)
+            else:
+                self.removeHighlightLabel(label_edit)
+
+        self.app.viewer.layers.selection.active = painting_layer
+        
     def updateLegendHighlighting(self, selected_label_event):
         """Update highlighting of legend"""
         current_label_id = selected_label_event.source._selected_label
