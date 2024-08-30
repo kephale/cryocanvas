@@ -45,29 +45,29 @@ class DataSet:
         todo: add ability to create missing labels/segmentations
         """
         # get the image
-        image = zarr.open(image_path, "r")
+        image = zarr.open(store=image_path, mode="r")
 
         # get the features
         if isinstance(features_path, str):
             features_path = [features_path]
-        features = {path: zarr.open(path, "r") for path in features_path}
+        features = {path: zarr.open(store=path, mode="r") for path in features_path}
 
         # get the labels
         if (not os.path.isdir(labels_path)) and make_missing_datasets:
             labels = zarr.open(
-                labels_path,
+                store=labels_path,
                 mode="a",
                 shape=image.shape,
                 dtype="i4",
                 dimension_separator=".",
             )
         else:
-            labels = zarr.open(labels_path, "a")
+            labels = zarr.open(store=labels_path, mode="a")
 
         # get the segmentation
         if (not os.path.isdir(segmentation_path)) and make_missing_datasets:
             segmentation = zarr.open(
-                segmentation_path,
+                store=segmentation_path,
                 mode="a",
                 shape=image.shape,
                 dtype="i4",
@@ -75,7 +75,7 @@ class DataSet:
             )
 
         else:
-            segmentation = zarr.open(segmentation_path, mode="a")
+            segmentation = zarr.open(store=segmentation_path, mode="a")
 
         return cls(
             image=image,
